@@ -1,5 +1,7 @@
 using Gtk;
 using JsonPrettyPrinterPlus;
+using LibHac.Common;
+using LibHac.Ns;
 using Ryujinx.Audio;
 using Ryujinx.Common.Logging;
 using Ryujinx.Configuration;
@@ -9,6 +11,7 @@ using Ryujinx.Graphics.OpenGL;
 using Ryujinx.HLE.FileSystem;
 using Ryujinx.HLE.FileSystem.Content;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -71,6 +74,7 @@ namespace Ryujinx.Ui
         [GUI] TreeView       _gameTable;
         [GUI] ScrolledWindow _gameTableWindow;
         [GUI] TreeSelection  _gameTableSelection;
+        [GUI] Label          _gpuName;
         [GUI] Label          _progressLabel;
         [GUI] Label          _firmwareVersionLabel;
         [GUI] LevelBar       _progressBar;
@@ -155,7 +159,8 @@ namespace Ryujinx.Ui
                 typeof(string),
                 typeof(string),
                 typeof(string),
-                typeof(string));
+                typeof(string),
+                typeof(BlitStruct<ApplicationControlProperty>));
 
             _tableStore.SetSortFunc(5, TimePlayedSort);
             _tableStore.SetSortFunc(6, LastPlayedSort);
@@ -579,7 +584,8 @@ namespace Ryujinx.Ui
                     args.AppData.LastPlayed,
                     args.AppData.FileExtension,
                     args.AppData.FileSize,
-                    args.AppData.Path);
+                    args.AppData.Path,
+                    args.AppData.ControlHolder);
             });
         }
 
@@ -605,6 +611,7 @@ namespace Ryujinx.Ui
             {
                 _hostStatus.Text = args.HostStatus;
                 _gameStatus.Text = args.GameStatus;
+                _gpuName.Text    = args.GpuName;
 
                 if (args.VSyncEnabled)
                 {
@@ -651,7 +658,9 @@ namespace Ryujinx.Ui
 
             if (treeIter.UserData == IntPtr.Zero) return;
 
-            GameTableContextMenu contextMenu = new GameTableContextMenu(_tableStore, treeIter, _virtualFileSystem);
+            BlitStruct<ApplicationControlProperty> controlData = (BlitStruct<ApplicationControlProperty>)_tableStore.GetValue(treeIter, 10);
+
+            GameTableContextMenu contextMenu = new GameTableContextMenu(_tableStore, controlData, treeIter, _virtualFileSystem);
             contextMenu.ShowAll();
             contextMenu.PopupAtPointer(null);
         }
