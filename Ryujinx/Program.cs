@@ -1,6 +1,6 @@
 using Gtk;
-using Ryujinx.Common;
 using Ryujinx.Common.Logging;
+using Ryujinx.Common.SystemInfo;
 using Ryujinx.Configuration;
 using Ryujinx.Debugger.Profiler;
 using Ryujinx.Ui;
@@ -43,12 +43,6 @@ namespace Ryujinx
             // Initialize Discord integration
             DiscordIntegrationModule.Initialize();
 
-            Logger.PrintInfo(LogClass.Application, $"Ryujinx Version: {Version}");
-
-            Logger.PrintInfo(LogClass.Application, $"Operating System: {SystemInfo.OsDescription}");
-            Logger.PrintInfo(LogClass.Application, $"CPU: {SystemInfo.CpuName}");
-            Logger.PrintInfo(LogClass.Application, $"Total RAM: {SystemInfo.RamSize}");
-
             string localConfigurationPath  = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config.json");
             string globalBasePath          = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Ryujinx");
             string globalConfigurationPath = Path.Combine(globalBasePath, "Config.json");
@@ -81,6 +75,12 @@ namespace Ryujinx
                 ConfigurationState.Instance.LoadDefault();
                 ConfigurationState.Instance.ToFileFormat().SaveConfig(globalConfigurationPath);
             }
+
+            Logger.PrintInfo(LogClass.Application, $"Ryujinx Version: {Version}");
+
+            Logger.PrintInfo(LogClass.Application, $"Operating System: {SystemInfo.Instance.OsDescription}");
+            Logger.PrintInfo(LogClass.Application, $"CPU: {SystemInfo.Instance.CpuName}");
+            Logger.PrintInfo(LogClass.Application, $"Total RAM: {SystemInfo.Instance.RamSizeInMB}");
 
             Profile.Initialize();
 

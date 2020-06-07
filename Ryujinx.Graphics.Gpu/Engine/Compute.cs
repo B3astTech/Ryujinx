@@ -4,7 +4,6 @@ using Ryujinx.Graphics.Gpu.Shader;
 using Ryujinx.Graphics.Gpu.State;
 using Ryujinx.Graphics.Shader;
 using System;
-using System.Runtime.InteropServices;
 
 namespace Ryujinx.Graphics.Gpu.Engine
 {
@@ -47,7 +46,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
                 BufferManager.SetComputeUniformBuffer(index, gpuVa, size);
             }
 
-            ComputeShader cs = ShaderCache.GetComputeShader(
+            ShaderBundle cs = ShaderCache.GetComputeShader(
                 state,
                 shaderGpuVa,
                 qmd.CtaThreadDimension0,
@@ -68,7 +67,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
             TextureManager.SetComputeTextureBufferIndex(state.Get<int>(MethodOffset.TextureBufferIndex));
 
-            ShaderProgramInfo info = cs.Shader.Program.Info;            
+            ShaderProgramInfo info = cs.Shaders[0].Program.Info;            
 
             for (int index = 0; index < info.CBuffers.Count; index++)
             {
@@ -91,9 +90,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
                 cbDescAddress += (ulong)cbDescOffset;
 
-                ReadOnlySpan<byte> cbDescriptorData = _context.PhysicalMemory.GetSpan(cbDescAddress, 0x10);
-
-                SbDescriptor cbDescriptor = MemoryMarshal.Cast<byte, SbDescriptor>(cbDescriptorData)[0];
+                SbDescriptor cbDescriptor = _context.PhysicalMemory.Read<SbDescriptor>(cbDescAddress);
 
                 BufferManager.SetComputeUniformBuffer(cb.Slot, cbDescriptor.PackAddress(), (uint)cbDescriptor.Size);
             }
@@ -110,9 +107,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
                 sbDescAddress += (ulong)sbDescOffset;
 
-                ReadOnlySpan<byte> sbDescriptorData = _context.PhysicalMemory.GetSpan(sbDescAddress, 0x10);
-
-                SbDescriptor sbDescriptor = MemoryMarshal.Cast<byte, SbDescriptor>(sbDescriptorData)[0];
+                SbDescriptor sbDescriptor = _context.PhysicalMemory.Read<SbDescriptor>(sbDescAddress);
 
                 BufferManager.SetComputeStorageBuffer(sb.Slot, sbDescriptor.PackAddress(), (uint)sbDescriptor.Size);
             }

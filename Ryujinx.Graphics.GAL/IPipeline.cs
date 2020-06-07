@@ -1,4 +1,5 @@
 using Ryujinx.Graphics.Shader;
+using System;
 
 namespace Ryujinx.Graphics.GAL
 {
@@ -13,6 +14,8 @@ namespace Ryujinx.Graphics.GAL
             bool  depthMask,
             int   stencilValue,
             int   stencilMask);
+
+        void CopyBuffer(BufferHandle source, BufferHandle destination, int srcOffset, int dstOffset, int size);
 
         void DispatchCompute(int groupsX, int groupsY, int groupsZ);
 
@@ -39,6 +42,8 @@ namespace Ryujinx.Graphics.GAL
 
         void SetImage(int index, ShaderStage stage, ITexture texture);
 
+        void SetOrigin(Origin origin);
+
         void SetPointSize(float size);
 
         void SetPrimitiveRestart(bool enable, int index);
@@ -49,7 +54,7 @@ namespace Ryujinx.Graphics.GAL
 
         void SetRasterizerDiscard(bool discard);
 
-        void SetRenderTargetColorMasks(uint[] componentMask);
+        void SetRenderTargetColorMasks(ReadOnlySpan<uint> componentMask);
 
         void SetRenderTargets(ITexture[] colors, ITexture depthStencil);
 
@@ -66,12 +71,18 @@ namespace Ryujinx.Graphics.GAL
 
         void SetUniformBuffer(int index, ShaderStage stage, BufferRange buffer);
 
-        void SetVertexAttribs(VertexAttribDescriptor[] vertexAttribs);
-        void SetVertexBuffers(VertexBufferDescriptor[] vertexBuffers);
+        void SetUserClipDistance(int index, bool enableClip);
 
-        void SetViewports(int first, Viewport[] viewports);
+        void SetVertexAttribs(ReadOnlySpan<VertexAttribDescriptor> vertexAttribs);
+        void SetVertexBuffers(ReadOnlySpan<VertexBufferDescriptor> vertexBuffers);
+
+        void SetViewports(int first, ReadOnlySpan<Viewport> viewports);
 
         void TextureBarrier();
         void TextureBarrierTiled();
+
+        bool TryHostConditionalRendering(ICounterEvent value, ulong compare, bool isEqual);
+        bool TryHostConditionalRendering(ICounterEvent value, ICounterEvent compare, bool isEqual);
+        void EndHostConditionalRendering();
     }
 }

@@ -1,3 +1,4 @@
+using ARMeilleure.Diagnostics;
 using ARMeilleure.IntermediateRepresentation;
 using ARMeilleure.State;
 using System;
@@ -84,6 +85,8 @@ namespace ARMeilleure.Translation
             func = DelegateCache.GetOrAdd(func);
 
             IntPtr ptr = Marshal.GetFunctionPointerForDelegate<Delegate>(func);
+
+            Symbols.Add((ulong)ptr.ToInt64(), func.Method.Name);
 
             OperandType returnType = GetOperandType(func.Method.ReturnType);
 
@@ -204,11 +207,6 @@ namespace ARMeilleure.Translation
         public Operand CountLeadingZeros(Operand op1)
         {
             return Add(Instruction.CountLeadingZeros, Local(op1.Type), op1);
-        }
-
-        internal Operand CpuId()
-        {
-            return Add(Instruction.CpuId, Local(OperandType.I64));
         }
 
         public Operand Divide(Operand op1, Operand op2)
@@ -606,15 +604,10 @@ namespace ARMeilleure.Translation
 
         private static bool EndsWithUnconditional(BasicBlock block)
         {
-            Operation lastOp = block.GetLastOp() as Operation;
-
-            if (lastOp == null)
-            {
-                return false;
-            }
-
-            return lastOp.Instruction == Instruction.Branch ||
-                   lastOp.Instruction == Instruction.Return;
+            return block.Operations.Last is Operation lastOp &&
+                   (lastOp.Instruction == Instruction.Branch ||
+                    lastOp.Instruction == Instruction.Return ||
+                    lastOp.Instruction == Instruction.Tailcall);
         }
 
         public ControlFlowGraph GetControlFlowGraph()

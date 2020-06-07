@@ -7,6 +7,7 @@ using LibHac.FsSystem.NcaUtils;
 using LibHac.Ns;
 using LibHac.Spl;
 using Ryujinx.Common.Configuration;
+using Ryujinx.Common.Logging;
 using Ryujinx.HLE.FileSystem;
 using System;
 using System.Collections.Generic;
@@ -25,13 +26,11 @@ namespace Ryujinx.Ui
         private TitleUpdateMetadata _titleUpdateWindowData;
         private Dictionary<RadioButton, string> _radioButtonToPathDictionary = new Dictionary<RadioButton, string>();
 
-#pragma warning disable CS0649
-#pragma warning disable IDE0044
+#pragma warning disable CS0649, IDE0044
         [GUI] Label       _baseTitleInfoLabel;
         [GUI] Box         _availableUpdatesBox;
         [GUI] RadioButton _noUpdateRadioButton;
-#pragma warning restore CS0649
-#pragma warning restore IDE0044
+#pragma warning restore CS0649, IDE0044
 
         public TitleUpdateWindow(string titleId, string titleName, VirtualFileSystem virtualFileSystem) : this(new Builder("Ryujinx.Ui.TitleUpdateWindow.glade"), titleId, titleName, virtualFileSystem) { }
 
@@ -61,7 +60,7 @@ namespace Ryujinx.Ui
 
             foreach (string path in _titleUpdateWindowData.Paths)
             {
-                AddUpdate(path);
+                AddUpdate(path, false);
             }
 
             _noUpdateRadioButton.Active = true;
@@ -74,7 +73,7 @@ namespace Ryujinx.Ui
             }
         }
 
-        private void AddUpdate(string path)
+        private void AddUpdate(string path, bool showErrorDialog = true)
         {
             if (File.Exists(path))
             {
@@ -82,46 +81,62 @@ namespace Ryujinx.Ui
                 {
                     PartitionFileSystem nsp = new PartitionFileSystem(file.AsStorage());
 
-                    foreach (DirectoryEntryEx ticketEntry in nsp.EnumerateEntries("/", "*.tik"))
-                    {
-                        Result result = nsp.OpenFile(out IFile ticketFile, ticketEntry.FullPath.ToU8Span(), OpenMode.Read);
-
-                        if (result.IsSuccess())
-                        {
-                            Ticket ticket = new Ticket(ticketFile.AsStream());
-
-                            _virtualFileSystem.KeySet.ExternalKeySet.Add(new RightsId(ticket.RightsId), new AccessKey(ticket.GetTitleKey(_virtualFileSystem.KeySet)));
-                        }
-                    }
+                    _virtualFileSystem.ImportTickets(nsp);
 
                     foreach (DirectoryEntryEx fileEntry in nsp.EnumerateEntries("/", "*.nca"))
                     {
                         nsp.OpenFile(out IFile ncaFile, fileEntry.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
 
-                        Nca nca = new Nca(_virtualFileSystem.KeySet, ncaFile.AsStorage());
-
-                        if ($"{nca.Header.TitleId.ToString("x16")[..^3]}000" == _titleId)
+                        try
                         {
-                            if (nca.Header.ContentType == NcaContentType.Control)
+                            Nca nca = new Nca(_virtualFileSystem.KeySet, ncaFile.AsStorage());
+
+                            if ($"{nca.Header.TitleId.ToString("x16")[..^3]}000" == _titleId)
                             {
-                                ApplicationControlProperty controlData = new ApplicationControlProperty();
+                                if (nca.Header.ContentType == NcaContentType.Control)
+                                {
+                                    ApplicationControlProperty controlData = new ApplicationControlProperty();
 
-                                nca.OpenFileSystem(NcaSectionType.Data, IntegrityCheckLevel.None).OpenFile(out IFile nacpFile, "/control.nacp".ToU8Span(), OpenMode.Read).ThrowIfFailure();
-                                nacpFile.Read(out long _, 0, SpanHelpers.AsByteSpan(ref controlData), ReadOption.None).ThrowIfFailure();
+                                    nca.OpenFileSystem(NcaSectionType.Data, IntegrityCheckLevel.None).OpenFile(out IFile nacpFile, "/control.nacp".ToU8Span(), OpenMode.Read).ThrowIfFailure();
+                                    nacpFile.Read(out _, 0, SpanHelpers.AsByteSpan(ref controlData), ReadOption.None).ThrowIfFailure();
 
-                                RadioButton radioButton = new RadioButton($"Version {controlData.DisplayVersion.ToString()} - {path}");
-                                radioButton.JoinGroup(_noUpdateRadioButton);
+                                    RadioButton radioButton = new RadioButton($"Version {controlData.DisplayVersion.ToString()} - {path}");
+                                    radioButton.JoinGroup(_noUpdateRadioButton);
 
-                                _availableUpdatesBox.Add(radioButton);
-                                _radioButtonToPathDictionary.Add(radioButton, path);
+                                    _availableUpdatesBox.Add(radioButton);
+                                    _radioButtonToPathDictionary.Add(radioButton, path);
 
-                                radioButton.Show();
-                                radioButton.Active = true;
+                                    radioButton.Show();
+                                    radioButton.Active = true;
+                                }
+                            }
+                            else
+                            {
+                                GtkDialog.CreateErrorDialog("The specified file does not contain an update for the selected title!");
+                                
+                                break;
                             }
                         }
-                        else
+                        catch (InvalidDataException exception)
                         {
-                            GtkDialog.CreateErrorDialog("The specified file does not contain an update for the selected title!");
+                            Logger.PrintError(LogClass.Application, $"{exception.Message}. Errored File: {path}");
+
+                            if (showErrorDialog)
+                            {
+                                GtkDialog.CreateInfoDialog("Ryujinx - Error", "Add Update Failed!", "The NCA header content type check has failed. This is usually because the header key is incorrect or missing.");
+                            }
+                            
+                            break;
+                        }
+                        catch (MissingKeyException exception)
+                        {
+                            Logger.PrintError(LogClass.Application, $"Your key set is missing a key with the name: {exception.Name}. Errored File: {path}");
+
+                            if (showErrorDialog)
+                            {
+                                GtkDialog.CreateInfoDialog("Ryujinx - Error", "Add Update Failed!", $"Your key set is missing a key with the name: {exception.Name}");
+                            }
+
                             break;
                         }
                     }

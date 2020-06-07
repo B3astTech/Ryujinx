@@ -84,7 +84,7 @@ namespace Ryujinx.Ui
         public static void ReadControlData(IFileSystem controlFs, Span<byte> outProperty)
         {
             controlFs.OpenFile(out IFile controlFile, "/control.nacp".ToU8Span(), OpenMode.Read).ThrowIfFailure();
-            controlFile.Read(out long _, 0, outProperty, ReadOption.None).ThrowIfFailure();
+            controlFile.Read(out _, 0, outProperty, ReadOption.None).ThrowIfFailure();
         }
 
         public static void LoadApplications(List<string> appDirs, VirtualFileSystem virtualFileSystem, Language desiredTitleLanguage)
@@ -413,7 +413,7 @@ namespace Ryujinx.Ui
                     Version       = version,
                     TimePlayed    = ConvertSecondsToReadableString(appMetadata.TimePlayed),
                     LastPlayed    = appMetadata.LastPlayed,
-                    FileExtension = Path.GetExtension(applicationPath).ToUpper().Remove(0 ,1),
+                    FileExtension = Path.GetExtension(applicationPath).ToUpper().Remove(0, 1),
                     FileSize      = (fileSize < 1) ? (fileSize * 1024).ToString("0.##") + "MB" : fileSize.ToString("0.##") + "GB",
                     Path          = applicationPath,
                     SaveDataPath  = saveDataPath,
@@ -474,17 +474,7 @@ namespace Ryujinx.Ui
             Nca controlNca = null;
 
             // Add keys to key set if needed
-            foreach (DirectoryEntryEx ticketEntry in pfs.EnumerateEntries("/", "*.tik"))
-            {
-                Result result = pfs.OpenFile(out IFile ticketFile, ticketEntry.FullPath.ToU8Span(), OpenMode.Read);
-
-                if (result.IsSuccess())
-                {
-                    Ticket ticket = new Ticket(ticketFile.AsStream());
-
-                    _virtualFileSystem.KeySet.ExternalKeySet.Add(new RightsId(ticket.RightsId), new AccessKey(ticket.GetTitleKey(_virtualFileSystem.KeySet)));
-                }
-            }
+            _virtualFileSystem.ImportTickets(pfs);
 
             // Find the Control NCA and store it in variable called controlNca
             foreach (DirectoryEntryEx fileEntry in pfs.EnumerateEntries("/", "*.nca"))
@@ -661,40 +651,47 @@ namespace Ryujinx.Ui
                 {
                     PartitionFileSystem nsp = new PartitionFileSystem(file.AsStorage());
 
-                    foreach (DirectoryEntryEx ticketEntry in nsp.EnumerateEntries("/", "*.tik"))
-                    {
-                        Result result = nsp.OpenFile(out IFile ticketFile, ticketEntry.FullPath.ToU8Span(), OpenMode.Read);
-
-                        if (result.IsSuccess())
-                        {
-                            Ticket ticket = new Ticket(ticketFile.AsStream());
-
-                            _virtualFileSystem.KeySet.ExternalKeySet.Add(new RightsId(ticket.RightsId), new AccessKey(ticket.GetTitleKey(_virtualFileSystem.KeySet)));
-                        }
-                    }
+                    _virtualFileSystem.ImportTickets(nsp);
 
                     foreach (DirectoryEntryEx fileEntry in nsp.EnumerateEntries("/", "*.nca"))
                     {
                         nsp.OpenFile(out IFile ncaFile, fileEntry.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
 
-                        Nca nca = new Nca(_virtualFileSystem.KeySet, ncaFile.AsStorage());
-
-                        if ($"{nca.Header.TitleId.ToString("x16")[..^3]}000" != titleId)
+                        try
                         {
+                            Nca nca = new Nca(_virtualFileSystem.KeySet, ncaFile.AsStorage());
+
+                            if ($"{nca.Header.TitleId.ToString("x16")[..^3]}000" != titleId)
+                            {
+                                break;
+                            }
+
+                            if (nca.Header.ContentType == NcaContentType.Control)
+                            {
+                                ApplicationControlProperty controlData = new ApplicationControlProperty();
+
+                                nca.OpenFileSystem(NcaSectionType.Data, IntegrityCheckLevel.None).OpenFile(out IFile nacpFile, "/control.nacp".ToU8Span(), OpenMode.Read).ThrowIfFailure();
+
+                                nacpFile.Read(out _, 0, SpanHelpers.AsByteSpan(ref controlData), ReadOption.None).ThrowIfFailure();
+
+                                version = controlData.DisplayVersion.ToString();
+
+                                return true;
+                            }
+                        }
+                        catch (InvalidDataException)
+                        {
+                            Logger.PrintWarning(LogClass.Application,
+                                $"The header key is incorrect or missing and therefore the NCA header content type check has failed. Errored File: {updatePath}");
+
                             break;
                         }
-
-                        if (nca.Header.ContentType == NcaContentType.Control)
+                        catch (MissingKeyException exception)
                         {
-                            ApplicationControlProperty controlData = new ApplicationControlProperty();
+                            Logger.PrintWarning(LogClass.Application,
+                                $"Your key set is missing a key with the name: {exception.Name}. Errored File: {updatePath}");
 
-                            nca.OpenFileSystem(NcaSectionType.Data, IntegrityCheckLevel.None).OpenFile(out IFile nacpFile, "/control.nacp".ToU8Span(), OpenMode.Read).ThrowIfFailure();
-
-                            nacpFile.Read(out long _, 0, SpanHelpers.AsByteSpan(ref controlData), ReadOption.None).ThrowIfFailure();
-
-                            version = controlData.DisplayVersion.ToString();
-
-                            return true;
+                            break;
                         }
                     }
                 }

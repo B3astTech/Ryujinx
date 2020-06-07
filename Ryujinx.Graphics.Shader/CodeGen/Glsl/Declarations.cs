@@ -19,6 +19,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             context.AppendLine("#extension GL_ARB_gpu_shader_int64 : enable");
             context.AppendLine("#extension GL_ARB_shader_ballot : enable");
             context.AppendLine("#extension GL_ARB_shader_group_vote : enable");
+            context.AppendLine("#extension GL_EXT_shader_image_load_formatted : enable");
 
             if (context.Config.Stage == ShaderStage.Compute)
             {
@@ -34,7 +35,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
 
             if (context.Config.Stage == ShaderStage.Geometry)
             {
-                string inPrimitive = ((InputTopology)context.Config.QueryInfo(QueryInfoName.PrimitiveTopology)).ToGlslString();
+                string inPrimitive = context.Config.GpuAccessor.QueryPrimitiveTopology().ToGlslString();
 
                 context.AppendLine($"layout ({inPrimitive}) in;");
 
@@ -48,7 +49,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
 
             if (context.Config.Stage == ShaderStage.Compute)
             {
-                int localMemorySize = BitUtils.DivRoundUp(context.Config.QueryInfo(QueryInfoName.ComputeLocalMemorySize), 4);
+                int localMemorySize = BitUtils.DivRoundUp(context.Config.GpuAccessor.QueryComputeLocalMemorySize(), 4);
 
                 if (localMemorySize != 0)
                 {
@@ -58,7 +59,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
                     context.AppendLine();
                 }
 
-                int sharedMemorySize = BitUtils.DivRoundUp(context.Config.QueryInfo(QueryInfoName.ComputeSharedMemorySize), 4);
+                int sharedMemorySize = BitUtils.DivRoundUp(context.Config.GpuAccessor.QueryComputeSharedMemorySize(), 4);
 
                 if (sharedMemorySize != 0)
                 {
@@ -124,9 +125,9 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             }
             else
             {
-                string localSizeX = NumberFormatter.FormatInt(context.Config.QueryInfo(QueryInfoName.ComputeLocalSizeX));
-                string localSizeY = NumberFormatter.FormatInt(context.Config.QueryInfo(QueryInfoName.ComputeLocalSizeY));
-                string localSizeZ = NumberFormatter.FormatInt(context.Config.QueryInfo(QueryInfoName.ComputeLocalSizeZ));
+                string localSizeX = NumberFormatter.FormatInt(context.Config.GpuAccessor.QueryComputeLocalSizeX());
+                string localSizeY = NumberFormatter.FormatInt(context.Config.GpuAccessor.QueryComputeLocalSizeY());
+                string localSizeZ = NumberFormatter.FormatInt(context.Config.GpuAccessor.QueryComputeLocalSizeZ());
 
                 context.AppendLine(
                     "layout (" +
@@ -323,6 +324,10 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
 
                 if (!images.TryAdd(imageName, texOp))
                 {
+                    // Ensure that all texture operations share the same format.
+                    // This avoid errors like mismatched formats.
+                    texOp.Format = images[imageName].Format;
+
                     continue;
                 }
 

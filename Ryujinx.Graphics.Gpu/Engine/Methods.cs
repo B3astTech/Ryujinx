@@ -104,6 +104,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
         /// <param name="state">GPU state where the triggers will be registered</param>
         public void RegisterCallbacksForFifo(GpuState state)
         {
+            state.RegisterCallback(MethodOffset.Semaphore,              Semaphore);
             state.RegisterCallback(MethodOffset.FenceAction,            FenceAction);
             state.RegisterCallback(MethodOffset.WaitForIdle,            WaitForIdle);
             state.RegisterCallback(MethodOffset.SendMacroCodeData,      SendMacroCodeData);
@@ -123,6 +124,11 @@ namespace Ryujinx.Graphics.Gpu.Engine
             if (state.QueryModified(MethodOffset.ShaderBaseAddress, MethodOffset.ShaderState))
             {
                 UpdateShaderState(state);
+            }
+
+            if (state.QueryModified(MethodOffset.ClipDistanceEnable))
+            {
+                UpdateUserClipState(state);
             }
 
             if (state.QueryModified(MethodOffset.RasterizeEnable))
@@ -287,9 +293,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
                     sbDescAddress += (ulong)sbDescOffset;
 
-                    ReadOnlySpan<byte> sbDescriptorData = _context.PhysicalMemory.GetSpan(sbDescAddress, 0x10);
-
-                    SbDescriptor sbDescriptor = MemoryMarshal.Cast<byte, SbDescriptor>(sbDescriptorData)[0];
+                    SbDescriptor sbDescriptor = _context.PhysicalMemory.Read<SbDescriptor>(sbDescAddress);
 
                     BufferManager.SetGraphicsStorageBuffer(stage, sb.Slot, sbDescriptor.PackAddress(), (uint)sbDescriptor.Size);
                 }
@@ -419,10 +423,23 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
             _context.Renderer.Pipeline.SetDepthMode(depthMode);
 
-            bool flipY = (state.Get<YControl>(MethodOffset.YControl) & YControl.NegateY) != 0;
-            float yFlip = flipY ? -1 : 1;
+            YControl yControl = state.Get<YControl>(MethodOffset.YControl);
 
-            Viewport[] viewports = new Viewport[Constants.TotalViewports];
+            bool   flipY  = yControl.HasFlag(YControl.NegateY);
+            Origin origin = yControl.HasFlag(YControl.TriangleRastFlip) ? Origin.LowerLeft : Origin.UpperLeft;
+            
+            _context.Renderer.Pipeline.SetOrigin(origin);
+
+            // The triangle rast flip flag only affects rasterization, the viewport is not flipped.
+            // Setting the origin mode to upper left on the host, however, not only affects rasterization,
+            // but also flips the viewport.
+            // We negate the effects of flipping the viewport by flipping it again using the viewport swizzle.
+            if (origin == Origin.UpperLeft)
+            {
+                flipY = !flipY;
+            }
+
+            Span<Viewport> viewports = stackalloc Viewport[Constants.TotalViewports];
 
             for (int index = 0; index < Constants.TotalViewports; index++)
             {
@@ -432,17 +449,42 @@ namespace Ryujinx.Graphics.Gpu.Engine
                 float x = transform.TranslateX - MathF.Abs(transform.ScaleX);
                 float y = transform.TranslateY - MathF.Abs(transform.ScaleY);
 
-                float width  = transform.ScaleX * 2;
-                float height = transform.ScaleY * 2 * yFlip;
+                float width  = MathF.Abs(transform.ScaleX) * 2;
+                float height = MathF.Abs(transform.ScaleY) * 2;
 
                 RectangleF region = new RectangleF(x, y, width, height);
 
+                ViewportSwizzle swizzleX = transform.UnpackSwizzleX();
+                ViewportSwizzle swizzleY = transform.UnpackSwizzleY();
+                ViewportSwizzle swizzleZ = transform.UnpackSwizzleZ();
+                ViewportSwizzle swizzleW = transform.UnpackSwizzleW();
+
+                if (transform.ScaleX < 0)
+                {
+                    swizzleX ^= ViewportSwizzle.NegativeFlag;
+                }
+
+                if (flipY)
+                {
+                    swizzleY ^= ViewportSwizzle.NegativeFlag;
+                }
+
+                if (transform.ScaleY < 0)
+                {
+                    swizzleY ^= ViewportSwizzle.NegativeFlag;
+                }
+
+                if (transform.ScaleZ < 0)
+                {
+                    swizzleZ ^= ViewportSwizzle.NegativeFlag;
+                }
+
                 viewports[index] = new Viewport(
                     region,
-                    transform.UnpackSwizzleX(),
-                    transform.UnpackSwizzleY(),
-                    transform.UnpackSwizzleZ(),
-                    transform.UnpackSwizzleW(),
+                    swizzleX,
+                    swizzleY,
+                    swizzleZ,
+                    swizzleW,
                     extents.DepthNear,
                     extents.DepthFar);
             }
@@ -565,9 +607,9 @@ namespace Ryujinx.Graphics.Gpu.Engine
         /// <param name="state">Current GPU state</param>
         private void UpdateVertexAttribState(GpuState state)
         {
-            VertexAttribDescriptor[] vertexAttribs = new VertexAttribDescriptor[16];
+            Span<VertexAttribDescriptor> vertexAttribs = stackalloc VertexAttribDescriptor[Constants.TotalVertexAttribs];
 
-            for (int index = 0; index < 16; index++)
+            for (int index = 0; index < Constants.TotalVertexAttribs; index++)
             {
                 var vertexAttrib = state.Get<VertexAttribState>(MethodOffset.VertexAttribState, index);
 
@@ -655,7 +697,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
         {
             _isAnyVbInstanced = false;
 
-            for (int index = 0; index < 16; index++)
+            for (int index = 0; index < Constants.TotalVertexBuffers; index++)
             {
                 var vertexBuffer = state.Get<VertexBufferState>(MethodOffset.VertexBufferState, index);
 
@@ -723,7 +765,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
         {
             bool rtColorMaskShared = state.Get<Boolean32>(MethodOffset.RtColorMaskShared);
 
-            uint[] componentMasks = new uint[Constants.TotalRenderTargets];
+            Span<uint> componentMasks = stackalloc uint[Constants.TotalRenderTargets];
 
             for (int index = 0; index < Constants.TotalRenderTargets; index++)
             {
@@ -834,7 +876,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
                 addressesArray[index] = baseAddress + shader.Offset;
             }
 
-            GraphicsShader gs = ShaderCache.GetGraphicsShader(state, addresses);
+            ShaderBundle gs = ShaderCache.GetGraphicsShader(state, addresses);
 
             _vsUsesInstanceId = gs.Shaders[0]?.Program.Info.UsesInstanceId ?? false;
 
@@ -900,6 +942,20 @@ namespace Ryujinx.Graphics.Gpu.Engine
             }
 
             _context.Renderer.Pipeline.SetProgram(gs.HostProgram);
+        }
+
+        /// <summary>
+        /// Updates user-defined clipping based on the guest GPU state.
+        /// </summary>
+        /// <param name="state">Current GPU state</param>
+        private void UpdateUserClipState(GpuState state)
+        {
+            int clipMask = state.Get<int>(MethodOffset.ClipDistanceEnable);
+
+            for (int i = 0; i < Constants.TotalClipDistances; ++i)
+            {
+                _context.Renderer.Pipeline.SetUserClipDistance(i, (clipMask & (1 << i)) != 0);
+            }
         }
 
         /// <summary>
