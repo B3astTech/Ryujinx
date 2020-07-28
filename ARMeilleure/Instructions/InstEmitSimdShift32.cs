@@ -1,9 +1,9 @@
 ﻿using ARMeilleure.Decoders;
 using ARMeilleure.IntermediateRepresentation;
-using ARMeilleure.State;
 using ARMeilleure.Translation;
 using System;
 using System.Diagnostics;
+using System.Reflection;
 
 using static ARMeilleure.Instructions.InstEmitSimdHelper32;
 using static ARMeilleure.IntermediateRepresentation.OperandHelper;
@@ -129,6 +129,27 @@ namespace ARMeilleure.Instructions
             EmitVectorUnaryNarrowOp32(context, (op1) => context.ShiftRightUI(op1, Const(shift)));
         }
 
+        public static void Vsra(ArmEmitterContext context)
+        {
+            OpCode32SimdShImm op = (OpCode32SimdShImm)context.CurrOp;
+            int shift = GetImmShr(op);
+            int maxShift = (8 << op.Size) - 1;
+
+            if (op.U)
+            {
+                EmitVectorImmBinaryQdQmOpZx32(context, (op1, op2) =>
+                {
+                    Operand shiftRes = shift > maxShift ? Const(op2.Type, 0) : context.ShiftRightUI(op2, Const(shift));
+
+                    return context.Add(op1, shiftRes);
+                });
+            }
+            else
+            {
+                EmitVectorImmBinaryQdQmOpSx32(context, (op1, op2) => context.Add(op1, context.ShiftRightSI(op2, Const(Math.Min(maxShift, shift)))));
+            }
+        }
+
         private static Operand EmitShlRegOp(ArmEmitterContext context, Operand op, Operand shiftLsB, int size, bool unsigned)
         {
             if (shiftLsB.Type == OperandType.I64)
@@ -244,11 +265,11 @@ namespace ARMeilleure.Instructions
             long roundConst,
             int shift)
         {
-            Delegate dlg = signed
-                ? (Delegate)new _S64_S64_S64_S32(SoftFallback.SignedShrImm64)
-                : (Delegate)new _U64_U64_S64_S32(SoftFallback.UnsignedShrImm64);
+            MethodInfo info = signed
+                ? typeof(SoftFallback).GetMethod(nameof(SoftFallback.SignedShrImm64))
+                : typeof(SoftFallback).GetMethod(nameof(SoftFallback.UnsignedShrImm64));
 
-            return context.Call(dlg, value, Const(roundConst), Const(shift));
+            return context.Call(info, value, Const(roundConst), Const(shift));
         }
 
         private static Operand EmitSatQ(ArmEmitterContext context, Operand value, int eSize, bool signed)

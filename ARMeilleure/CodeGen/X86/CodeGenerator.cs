@@ -5,6 +5,7 @@ using ARMeilleure.Common;
 using ARMeilleure.Diagnostics;
 using ARMeilleure.IntermediateRepresentation;
 using ARMeilleure.Translation;
+using ARMeilleure.Translation.PTC;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -100,7 +101,7 @@ namespace ARMeilleure.CodeGen.X86
             _instTable[(int)inst] = func;
         }
 
-        public static CompiledFunction Generate(CompilerContext cctx)
+        public static CompiledFunction Generate(CompilerContext cctx, PtcInfo ptcInfo = null)
         {
             ControlFlowGraph cfg = cctx.Cfg;
 
@@ -158,9 +159,11 @@ namespace ARMeilleure.CodeGen.X86
 
             using (MemoryStream stream = new MemoryStream())
             {
-                CodeGenContext context = new CodeGenContext(stream, allocResult, maxCallArgs, cfg.Blocks.Count);
+                CodeGenContext context = new CodeGenContext(stream, allocResult, maxCallArgs, cfg.Blocks.Count, ptcInfo);
 
                 UnwindInfo unwindInfo = WritePrologue(context);
+
+                ptcInfo?.WriteUnwindInfo(unwindInfo);
 
                 for (BasicBlock block = cfg.Blocks.First; block != null; block = block.ListNext)
                 {
@@ -326,6 +329,21 @@ namespace ARMeilleure.CodeGen.X86
                         Debug.Assert(!dest.Type.IsInteger() && src2.Type.IsInteger());
 
                         context.Assembler.WriteInstruction(info.Inst, dest, src1, src2, src2.Type);
+
+                        break;
+                    }
+
+                    case IntrinsicType.Crc32:
+                    {
+                        Operand dest = operation.Destination;
+                        Operand src1 = operation.GetSource(0);
+                        Operand src2 = operation.GetSource(1);
+
+                        EnsureSameReg(dest, src1);
+
+                        Debug.Assert(dest.Type.IsInteger() && src1.Type.IsInteger() && src2.Type.IsInteger());
+
+                        context.Assembler.WriteInstruction(info.Inst, dest, src2, dest.Type);
 
                         break;
                     }

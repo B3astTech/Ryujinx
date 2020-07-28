@@ -18,7 +18,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
         {
             uint qmdAddress = (uint)state.Get<int>(MethodOffset.DispatchParamsAddress);
 
-            var qmd = _context.MemoryAccessor.Read<ComputeQmd>((ulong)qmdAddress << 8);
+            var qmd = _context.MemoryManager.Read<ComputeQmd>((ulong)qmdAddress << 8);
 
             GpuVa shaderBaseAddress = state.Get<GpuVa>(MethodOffset.ShaderBaseAddress);
 
@@ -67,7 +67,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
             TextureManager.SetComputeTextureBufferIndex(state.Get<int>(MethodOffset.TextureBufferIndex));
 
-            ShaderProgramInfo info = cs.Shaders[0].Program.Info;            
+            ShaderProgramInfo info = cs.Shaders[0].Program.Info;
 
             for (int index = 0; index < info.CBuffers.Count; index++)
             {
@@ -86,7 +86,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
                 ulong cbDescAddress = BufferManager.GetComputeUniformBufferAddress(0);
 
-                int cbDescOffset = 0x260 + cb.Slot * 0x10;
+                int cbDescOffset = 0x260 + (cb.Slot - 8) * 0x10;
 
                 cbDescAddress += (ulong)cbDescOffset;
 
@@ -132,11 +132,11 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
                 if (descriptor.IsBindless)
                 {
-                    textureBindings[index] = new TextureBindingInfo(target, descriptor.CbufOffset, descriptor.CbufSlot);
+                    textureBindings[index] = new TextureBindingInfo(target, descriptor.CbufOffset, descriptor.CbufSlot, descriptor.Flags);
                 }
                 else
                 {
-                    textureBindings[index] = new TextureBindingInfo(target, descriptor.HandleIndex);
+                    textureBindings[index] = new TextureBindingInfo(target, descriptor.HandleIndex, descriptor.Flags);
                 }
             }
 
@@ -150,7 +150,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
                 Target target = GetTarget(descriptor.Type);
 
-                imageBindings[index] = new TextureBindingInfo(target, descriptor.HandleIndex);
+                imageBindings[index] = new TextureBindingInfo(target, descriptor.HandleIndex, descriptor.Flags);
             }
 
             TextureManager.SetComputeImages(imageBindings);
@@ -163,7 +163,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
                 qmd.CtaRasterHeight,
                 qmd.CtaRasterDepth);
 
-            UpdateShaderState(state);
+            _forceShaderUpdate = true;
         }
     }
 }

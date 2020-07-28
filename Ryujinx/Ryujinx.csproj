@@ -47,7 +47,7 @@
     <None Remove="Ui\assets\Icon.png" />
     <None Remove="Ui\assets\TwitterLogo.png" />
     <None Remove="Ui\ControllerWindow.glade" />
-    <None Remove="Ui\GameTableContextMenu.glade" />
+    <None Remove="Ui\DlcWindow.glade" />
     <None Remove="Ui\MainWindow.glade" />
     <None Remove="Ui\ProfileDialog.glade" />
     <None Remove="Ui\SettingsWindow.glade" />
@@ -71,10 +71,10 @@
     <EmbeddedResource Include="Ui\assets\Icon.png" />
     <EmbeddedResource Include="Ui\assets\TwitterLogo.png" />
     <EmbeddedResource Include="Ui\ControllerWindow.glade" />
-    <EmbeddedResource Include="Ui\GameTableContextMenu.glade" />
     <EmbeddedResource Include="Ui\MainWindow.glade" />
     <EmbeddedResource Include="Ui\ProfileDialog.glade" />
     <EmbeddedResource Include="Ui\SettingsWindow.glade" />
+    <EmbeddedResource Include="Ui\DlcWindow.glade" />
     <EmbeddedResource Include="Ui\TitleUpdateWindow.glade" />
   </ItemGroup>
 
@@ -83,6 +83,7 @@
     <PackageReference Include="GLWidget" Version="1.0.2" />
     <PackageReference Include="GtkSharp" Version="3.22.25.56" />
     <PackageReference Include="GtkSharp.Dependencies" Version="1.1.0" Condition="'$(RuntimeIdentifier)' != 'linux-x64' AND '$(RuntimeIdentifier)' != 'osx-x64'" />
+    <PackageReference Include="Ryujinx.Graphics.Nvdec.Dependencies" Version="4.3.0" Condition="'$(RuntimeIdentifier)' != 'linux-x64' AND '$(RuntimeIdentifier)' != 'osx-x64'" />
     <PackageReference Include="OpenTK.NetStandard" Version="1.0.5.12" />
   </ItemGroup>
 
@@ -99,6 +100,9 @@
   <ItemGroup>
     <None Update="Config.json" Condition="'$(Configuration)' == 'Debug' OR '$(Configuration)' == 'Profile Debug'">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="THIRDPARTY.md">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
   </ItemGroup>
 

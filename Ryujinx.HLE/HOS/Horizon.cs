@@ -66,6 +66,7 @@ namespace Ryujinx.HLE.HOS
 #pragma warning restore CS0649
         private bool _isDisposed;
 
+        public bool EnablePtc { get; set; }
 
         public IntegrityCheckLevel FsIntegrityCheckLevel { get; set; }
 
@@ -183,11 +184,11 @@ namespace Ryujinx.HLE.HOS
             InitLibHacHorizon();
         }
 
-        public void LoadKip(string kipFile)
+        public void LoadKip(string kipPath)
         {
-            using IStorage fs = new LocalStorage(kipFile, FileAccess.Read);
+            using IStorage kipFile = new LocalStorage(kipPath, FileAccess.Read);
 
-            ProgramLoader.LoadKip(KernelContext, new KipExecutable(fs));
+            ProgramLoader.LoadKip(KernelContext, new KipExecutable(kipFile));
         }
 
         private void InitLibHacHorizon()
@@ -292,8 +293,6 @@ namespace Ryujinx.HLE.HOS
                 KernelContext.ThreadCounter.Wait();
 
                 KernelContext.Dispose();
-
-                Device.Unload();
             }
         }
     }

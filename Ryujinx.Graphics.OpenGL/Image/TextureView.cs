@@ -22,7 +22,7 @@ namespace Ryujinx.Graphics.OpenGL.Image
             TextureStorage    parent,
             TextureCreateInfo info,
             int               firstLayer,
-            int               firstLevel) : base(info)
+            int               firstLevel) : base(info, parent.ScaleFactor)
         {
             _renderer = renderer;
             _parent   = parent;
@@ -72,6 +72,15 @@ namespace Ryujinx.Graphics.OpenGL.Image
                 (int)Info.SwizzleA.Convert()
             };
 
+            if (Info.Format.IsBgra8())
+            {
+                // Swap B <-> R for BGRA formats, as OpenGL has no support for them
+                // and we need to manually swap the components on read/write on the GPU.
+                int temp = swizzleRgba[0];
+                swizzleRgba[0] = swizzleRgba[2];
+                swizzleRgba[2] = temp;
+            }
+
             GL.TexParameter(target, TextureParameterName.TextureSwizzleRgba, swizzleRgba);
 
             int maxLevel = Info.Levels - 1;
@@ -101,7 +110,7 @@ namespace Ryujinx.Graphics.OpenGL.Image
                 // So we emulate that here with a texture copy (see the first CopyTo overload).
                 // However right now it only does a single copy right after the view is created,
                 // so it doesn't work for all cases.
-                TextureView emulatedView = (TextureView)_renderer.CreateTexture(info);
+                TextureView emulatedView = (TextureView)_renderer.CreateTexture(info, ScaleFactor);
 
                 emulatedView._emulatedViewParent = this;
 
@@ -122,10 +131,10 @@ namespace Ryujinx.Graphics.OpenGL.Image
             {
                 if (_incompatibleFormatView == null)
                 {
-                    _incompatibleFormatView = (TextureView)_renderer.CreateTexture(Info);
+                    _incompatibleFormatView = (TextureView)_renderer.CreateTexture(Info, ScaleFactor);
                 }
 
-                TextureCopyUnscaled.Copy(_parent.Info, _incompatibleFormatView.Info, _parent.Handle, _incompatibleFormatView.Handle, FirstLayer, 0, FirstLevel, 0);
+                TextureCopyUnscaled.Copy(_parent.Info, _incompatibleFormatView.Info, _parent.Handle, _incompatibleFormatView.Handle, FirstLayer, 0, FirstLevel, 0, ScaleFactor);
 
                 return _incompatibleFormatView.Handle;
             }
@@ -137,7 +146,7 @@ namespace Ryujinx.Graphics.OpenGL.Image
         {
             if (_incompatibleFormatView != null)
             {
-                TextureCopyUnscaled.Copy(_incompatibleFormatView.Info, _parent.Info, _incompatibleFormatView.Handle, _parent.Handle, 0, FirstLayer, 0, FirstLevel);
+                TextureCopyUnscaled.Copy(_incompatibleFormatView.Info, _parent.Info, _incompatibleFormatView.Handle, _parent.Handle, 0, FirstLayer, 0, FirstLevel, ScaleFactor);
             }
         }
 
@@ -145,7 +154,7 @@ namespace Ryujinx.Graphics.OpenGL.Image
         {
             TextureView destinationView = (TextureView)destination;
 
-            TextureCopyUnscaled.Copy(Info, destinationView.Info, Handle, destinationView.Handle, 0, firstLayer, 0, firstLevel);
+            TextureCopyUnscaled.Copy(Info, destinationView.Info, Handle, destinationView.Handle, 0, firstLayer, 0, firstLevel, ScaleFactor);
 
             if (destinationView._emulatedViewParent != null)
             {
@@ -157,7 +166,8 @@ namespace Ryujinx.Graphics.OpenGL.Image
                     0,
                     destinationView.FirstLayer,
                     0,
-                    destinationView.FirstLevel);
+                    destinationView.FirstLevel,
+                    ScaleFactor);
             }
         }
 
@@ -188,13 +198,26 @@ namespace Ryujinx.Graphics.OpenGL.Image
             return data;
         }
 
-        private void WriteTo(IntPtr ptr)
+        public void WriteToPbo(int offset, bool forceBgra)
+        {
+            WriteTo(IntPtr.Zero + offset, forceBgra);
+        }
+
+        private void WriteTo(IntPtr data, bool forceBgra = false)
         {
             TextureTarget target = Target.Convert();
 
             Bind(target, 0);
 
             FormatInfo format = FormatTable.GetFormatInfo(Info.Format);
+
+            PixelFormat pixelFormat = format.PixelFormat;
+            PixelType   pixelType   = format.PixelType;
+
+            if (forceBgra)
+            {
+                pixelFormat = PixelFormat.Bgra;
+            }
 
             int faces = 1;
 
@@ -213,20 +236,15 @@ namespace Ryujinx.Graphics.OpenGL.Image
 
                     if (format.IsCompressed)
                     {
-                        GL.GetCompressedTexImage(target + face, level, ptr + faceOffset);
+                        GL.GetCompressedTexImage(target + face, level, data + faceOffset);
                     }
                     else
                     {
-                        GL.GetTexImage(
-                            target + face,
-                            level,
-                            format.PixelFormat,
-                            format.PixelType,
-                            ptr + faceOffset);
+                        GL.GetTexImage(target + face, level, pixelFormat, pixelType, data + faceOffset);
                     }
                 }
 
-                ptr += Info.GetMipSize(level);
+                data += Info.GetMipSize(level);
             }
         }
 
@@ -236,12 +254,17 @@ namespace Ryujinx.Graphics.OpenGL.Image
             {
                 fixed (byte* ptr = data)
                 {
-                    SetData((IntPtr)ptr, data.Length);
+                    ReadFrom((IntPtr)ptr, data.Length);
                 }
             }
         }
 
-        private void SetData(IntPtr data, int size)
+        public void ReadFromPbo(int offset, int size)
+        {
+            ReadFrom(IntPtr.Zero + offset, size);
+        }
+
+        private void ReadFrom(IntPtr data, int size)
         {
             TextureTarget target = Target.Convert();
 

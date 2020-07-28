@@ -24,8 +24,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
         private Buffer[] _bufferOverlaps;
 
         private IndexBuffer _indexBuffer;
-
         private VertexBuffer[] _vertexBuffers;
+        private BufferBounds[] _transformFeedbackBuffers;
 
         private class BuffersPerStage
         {
@@ -56,6 +56,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
         private bool _indexBufferDirty;
         private bool _vertexBuffersDirty;
         private uint _vertexBuffersEnableMask;
+        private bool _transformFeedbackBuffersDirty;
 
         private bool _rebind;
 
@@ -72,6 +73,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
             _bufferOverlaps = new Buffer[OverlapsBufferInitialCapacity];
 
             _vertexBuffers = new VertexBuffer[Constants.TotalVertexBuffers];
+
+            _transformFeedbackBuffers = new BufferBounds[Constants.TotalTransformFeedbackBuffers];
 
             _cpStorageBuffers = new BuffersPerStage(Constants.TotalCpStorageBuffers);
             _cpUniformBuffers = new BuffersPerStage(Constants.TotalCpUniformBuffers);
@@ -104,6 +107,18 @@ namespace Ryujinx.Graphics.Gpu.Memory
         }
 
         /// <summary>
+        /// Sets a new index buffer that overrides the one set on the call to <see cref="CommitGraphicsBindings"/>.
+        /// </summary>
+        /// <param name="buffer">Buffer to be used as index buffer</param>
+        /// <param name="type">Type of each index buffer element</param>
+        public void SetIndexBuffer(BufferRange buffer, IndexType type)
+        {
+            _context.Renderer.Pipeline.SetIndexBuffer(buffer, type);
+
+            _indexBufferDirty = true;
+        }
+
+        /// <summary>
         /// Sets the memory range with vertex buffer data, to be used for subsequent draw calls.
         /// </summary>
         /// <param name="index">Index of the vertex buffer (up to 16)</param>
@@ -130,6 +145,16 @@ namespace Ryujinx.Graphics.Gpu.Memory
             {
                 _vertexBuffersEnableMask &= ~(1u << index);
             }
+        }
+
+        public void SetTransformFeedbackBuffer(int index, ulong gpuVa, ulong size)
+        {
+            ulong address = TranslateAndCreateBuffer(gpuVa, size);
+
+            _transformFeedbackBuffers[index].Address = address;
+            _transformFeedbackBuffers[index].Size    = size;
+
+            _transformFeedbackBuffersDirty = true;
         }
 
         /// <summary>
@@ -507,6 +532,41 @@ namespace Ryujinx.Graphics.Gpu.Memory
                     }
 
                     SynchronizeBufferRange(vb.Address, vb.Size);
+                }
+            }
+
+            if (_transformFeedbackBuffersDirty || _rebind)
+            {
+                _transformFeedbackBuffersDirty = false;
+
+                for (int index = 0; index < Constants.TotalTransformFeedbackBuffers; index++)
+                {
+                    BufferBounds tfb = _transformFeedbackBuffers[index];
+
+                    if (tfb.Address == 0)
+                    {
+                        _context.Renderer.Pipeline.SetTransformFeedbackBuffer(index, new BufferRange(BufferHandle.Null, 0, 0));
+
+                        continue;
+                    }
+
+                    BufferRange buffer = GetBufferRange(tfb.Address, tfb.Size);
+
+                    _context.Renderer.Pipeline.SetTransformFeedbackBuffer(index, buffer);
+                }
+            }
+            else
+            {
+                for (int index = 0; index < Constants.TotalTransformFeedbackBuffers; index++)
+                {
+                    BufferBounds tfb = _transformFeedbackBuffers[index];
+
+                    if (tfb.Address == 0)
+                    {
+                        continue;
+                    }
+
+                    SynchronizeBufferRange(tfb.Address, tfb.Size);
                 }
             }
 

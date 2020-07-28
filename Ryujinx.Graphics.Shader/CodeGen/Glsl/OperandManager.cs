@@ -64,6 +64,16 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             { AttributeConsts.GtMask,              new BuiltInAttribute("unpackUint2x32(gl_SubGroupGtMaskARB).x", VariableType.U32) },
             { AttributeConsts.LeMask,              new BuiltInAttribute("unpackUint2x32(gl_SubGroupLeMaskARB).x", VariableType.U32) },
             { AttributeConsts.LtMask,              new BuiltInAttribute("unpackUint2x32(gl_SubGroupLtMaskARB).x", VariableType.U32) },
+
+            // Support uniforms.
+            { AttributeConsts.FragmentOutputIsBgraBase + 0,  new BuiltInAttribute($"{DefaultNames.IsBgraName}[0]",  VariableType.Bool) },
+            { AttributeConsts.FragmentOutputIsBgraBase + 4,  new BuiltInAttribute($"{DefaultNames.IsBgraName}[1]",  VariableType.Bool) },
+            { AttributeConsts.FragmentOutputIsBgraBase + 8,  new BuiltInAttribute($"{DefaultNames.IsBgraName}[2]",  VariableType.Bool) },
+            { AttributeConsts.FragmentOutputIsBgraBase + 12, new BuiltInAttribute($"{DefaultNames.IsBgraName}[3]",  VariableType.Bool) },
+            { AttributeConsts.FragmentOutputIsBgraBase + 16, new BuiltInAttribute($"{DefaultNames.IsBgraName}[4]",  VariableType.Bool) },
+            { AttributeConsts.FragmentOutputIsBgraBase + 20, new BuiltInAttribute($"{DefaultNames.IsBgraName}[5]",  VariableType.Bool) },
+            { AttributeConsts.FragmentOutputIsBgraBase + 24, new BuiltInAttribute($"{DefaultNames.IsBgraName}[6]",  VariableType.Bool) },
+            { AttributeConsts.FragmentOutputIsBgraBase + 28, new BuiltInAttribute($"{DefaultNames.IsBgraName}[7]",  VariableType.Bool) }
         };
 
         private Dictionary<AstOperand, string> _locals;
@@ -147,10 +157,9 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
         {
             int value = attr.Value;
 
-            string swzMask = GetSwizzleMask((value >> 2) & 3);
+            char swzMask = GetSwizzleMask((value >> 2) & 3);
 
-            if (value >= AttributeConsts.UserAttributeBase &&
-                value <  AttributeConsts.UserAttributeEnd)
+            if (value >= AttributeConsts.UserAttributeBase && value < AttributeConsts.UserAttributeEnd)
             {
                 value -= AttributeConsts.UserAttributeBase;
 
@@ -158,21 +167,18 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
                     ? DefaultNames.OAttributePrefix
                     : DefaultNames.IAttributePrefix;
 
-                string name = $"{prefix}{(value >> 4)}";
+                string name = $"{prefix}{(value >> 4)}_{swzMask}";
 
                 if (stage == ShaderStage.Geometry && !isOutAttr)
                 {
                     name += $"[{indexExpr}]";
                 }
 
-                name += "." + swzMask;
-
                 return name;
             }
             else
             {
-                if (value >= AttributeConsts.FragmentOutputColorBase &&
-                    value <  AttributeConsts.FragmentOutputColorEnd)
+                if (value >= AttributeConsts.FragmentOutputColorBase && value < AttributeConsts.FragmentOutputColorEnd)
                 {
                     value -= AttributeConsts.FragmentOutputColorBase;
 
@@ -185,8 +191,8 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
                     {
                         switch (value & ~3)
                         {
-                            case AttributeConsts.PositionX: return "gl_FragCoord.x";
-                            case AttributeConsts.PositionY: return "gl_FragCoord.y";
+                            case AttributeConsts.PositionX: return "(gl_FragCoord.x / fp_renderScale[0])";
+                            case AttributeConsts.PositionY: return "(gl_FragCoord.y / fp_renderScale[0])";
                             case AttributeConsts.PositionZ: return "gl_FragCoord.z";
                             case AttributeConsts.PositionW: return "gl_FragCoord.w";
                         }
@@ -264,9 +270,9 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             return _stagePrefixes[index];
         }
 
-        private static string GetSwizzleMask(int value)
+        private static char GetSwizzleMask(int value)
         {
-            return "xyzw".Substring(value, 1);
+            return "xyzw"[value];
         }
 
         public static VariableType GetNodeDestType(IAstNode node)

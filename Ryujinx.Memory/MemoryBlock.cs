@@ -127,21 +127,21 @@ namespace Ryujinx.Memory
         /// <summary>
         /// Copies data from one memory location to another.
         /// </summary>
-        /// <param name="srcOffset">Source offset to read the data from</param>
         /// <param name="dstOffset">Destination offset to write the data into</param>
+        /// <param name="srcOffset">Source offset to read the data from</param>
         /// <param name="size">Size of the copy in bytes</param>
         /// <exception cref="ObjectDisposedException">Throw when the memory block has already been disposed</exception>
         /// <exception cref="ArgumentOutOfRangeException">Throw when <paramref name="srcOffset"/>, <paramref name="dstOffset"/> or <paramref name="size"/> is out of range</exception>
-        public void Copy(ulong srcOffset, ulong dstOffset, ulong size)
+        public void Copy(ulong dstOffset, ulong srcOffset, ulong size)
         {
             const int MaxChunkSize = 1 << 30;
-            
+
             for (ulong offset = 0; offset < size; offset += MaxChunkSize)
             {
                 int copySize = (int)Math.Min(MaxChunkSize, size - offset);
 
                 Write(dstOffset + offset, GetSpan(srcOffset + offset, copySize));
-            }   
+            }
         }
 
         /// <summary>
@@ -225,7 +225,7 @@ namespace Ryujinx.Memory
         }
 
         /// <summary>
-        /// Gets the span of a given memory block region.
+        /// Gets the <see cref="System.Span{T}"/> of a given memory block region.
         /// </summary>
         /// <param name="offset">Start offset of the memory region</param>
         /// <param name="size">Size in bytes of the region</param>
@@ -236,6 +236,20 @@ namespace Ryujinx.Memory
         public unsafe Span<byte> GetSpan(ulong offset, int size)
         {
             return new Span<byte>((void*)GetPointer(offset, size), size);
+        }
+
+        /// <summary>
+        /// Gets the <see cref="System.Memory{T}"/> of a given memory block region.
+        /// </summary>
+        /// <param name="offset">Start offset of the memory region</param>
+        /// <param name="size">Size in bytes of the region</param>
+        /// <returns>Memory of the memory region</returns>
+        /// <exception cref="ObjectDisposedException">Throw when the memory block has already been disposed</exception>
+        /// <exception cref="ArgumentOutOfRangeException">Throw when either <paramref name="offset"/> or <paramref name="size"/> are out of range</exception>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public unsafe Memory<byte> GetMemory(ulong offset, int size)
+        {
+            return new NativeMemoryManager<byte>((byte*)GetPointer(offset, size), size).Memory;
         }
 
         /// <summary>

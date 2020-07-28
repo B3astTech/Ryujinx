@@ -59,7 +59,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                     return null;
                 }
 
-                texture = Context.Methods.TextureManager.FindOrCreateTexture(info, TextureSearchFlags.Sampler);
+                texture = Context.Methods.TextureManager.FindOrCreateTexture(info, TextureSearchFlags.ForSampler);
 
                 texture.IncrementReferenceCount();
 
@@ -149,7 +149,10 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             if (!FormatTable.TryGetTextureFormat(format, srgb, out FormatInfo formatInfo))
             {
-                Logger.PrintError(LogClass.Gpu, $"Invalid texture format 0x{format:X} (sRGB: {srgb}).");
+                if ((long)address > 0L && (int)format > 0)
+                {
+                    Logger.PrintError(LogClass.Gpu, $"Invalid texture format 0x{format:X} (sRGB: {srgb}).");
+                }
 
                 formatInfo = FormatInfo.Default;
             }
@@ -171,7 +174,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                 swizzleB,
                 swizzleA);
 
-            if (IsDepthStencil(formatInfo.Format))
+            if (formatInfo.Format.IsDepthOrStencil())
             {
                 swizzleR = SwizzleComponent.Red;
                 swizzleG = SwizzleComponent.Red;
@@ -258,26 +261,6 @@ namespace Ryujinx.Graphics.Gpu.Image
         {
             return component == SwizzleComponent.Red ||
                    component == SwizzleComponent.Green;
-        }
-
-        /// <summary>
-        /// Checks if the texture format is a depth, stencil or depth-stencil format.
-        /// </summary>
-        /// <param name="format">Texture format</param>
-        /// <returns>True if the format is a depth, stencil or depth-stencil format, false otherwise</returns>
-        private static bool IsDepthStencil(Format format)
-        {
-            switch (format)
-            {
-                case Format.D16Unorm:
-                case Format.D24UnormS8Uint:
-                case Format.D24X8Unorm:
-                case Format.D32Float:
-                case Format.D32FloatS8Uint:
-                    return true;
-            }
-
-            return false;
         }
 
         /// <summary>

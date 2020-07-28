@@ -331,6 +331,31 @@ namespace Ryujinx.Graphics.OpenGL
             return PrimitiveType.Points;
         }
 
+        public static TransformFeedbackPrimitiveType ConvertToTfType(this PrimitiveTopology topology)
+        {
+            switch (topology)
+            {
+                case PrimitiveTopology.Points:
+                    return TransformFeedbackPrimitiveType.Points;
+                case PrimitiveTopology.Lines:
+                case PrimitiveTopology.LineLoop:
+                case PrimitiveTopology.LineStrip:
+                case PrimitiveTopology.LinesAdjacency:
+                case PrimitiveTopology.LineStripAdjacency:
+                    return TransformFeedbackPrimitiveType.Lines;
+                case PrimitiveTopology.Triangles:
+                case PrimitiveTopology.TriangleStrip:
+                case PrimitiveTopology.TriangleFan:
+                case PrimitiveTopology.TrianglesAdjacency:
+                case PrimitiveTopology.TriangleStripAdjacency:
+                    return TransformFeedbackPrimitiveType.Triangles;
+            }
+
+            Logger.PrintDebug(LogClass.Gpu, $"Invalid {nameof(PrimitiveTopology)} enum value: {topology}.");
+
+            return TransformFeedbackPrimitiveType.Points;
+        }
+
         public static OpenTK.Graphics.OpenGL.StencilOp Convert(this GAL.StencilOp op)
         {
             switch (op)
@@ -442,6 +467,49 @@ namespace Ryujinx.Graphics.OpenGL
             Logger.PrintDebug(LogClass.Gpu, $"Invalid {nameof(ViewportSwizzle)} enum value: {swizzle}.");
 
             return NvViewportSwizzle.ViewportSwizzlePositiveXNv;
+        }
+
+        public static All Convert(this LogicalOp op)
+        {
+            switch (op)
+            {
+                case LogicalOp.Clear:
+                    return All.Clear;
+                case LogicalOp.And:
+                    return All.And;
+                case LogicalOp.AndReverse:
+                    return All.AndReverse;
+                case LogicalOp.Copy:
+                    return All.Copy;
+                case LogicalOp.AndInverted:
+                    return All.AndInverted;
+                case LogicalOp.Noop:
+                    return All.Noop;
+                case LogicalOp.Xor:
+                    return All.Xor;
+                case LogicalOp.Or:
+                    return All.Or;
+                case LogicalOp.Nor:
+                    return All.Nor;
+                case LogicalOp.Equiv:
+                    return All.Equiv;
+                case LogicalOp.Invert:
+                    return All.Invert;
+                case LogicalOp.OrReverse:
+                    return All.OrReverse;
+                case LogicalOp.CopyInverted:
+                    return All.CopyInverted;
+                case LogicalOp.OrInverted:
+                    return All.OrInverted;
+                case LogicalOp.Nand:
+                    return All.Nand;
+                case LogicalOp.Set:
+                    return All.Set;
+            }
+
+            Logger.PrintDebug(LogClass.Gpu, $"Invalid {nameof(LogicalOp)} enum value: {op}.");
+
+            return All.Never;
         }
     }
 }

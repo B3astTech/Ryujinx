@@ -44,9 +44,9 @@ namespace Ryujinx.Graphics.OpenGL
             return Buffer.Create(size);
         }
 
-        public IProgram CreateProgram(IShader[] shaders)
+        public IProgram CreateProgram(IShader[] shaders, TransformFeedbackDescriptor[] transformFeedbackDescriptors)
         {
-            return new Program(shaders);
+            return new Program(shaders, transformFeedbackDescriptors);
         }
 
         public ISampler CreateSampler(SamplerCreateInfo info)
@@ -54,9 +54,9 @@ namespace Ryujinx.Graphics.OpenGL
             return new Sampler(info);
         }
 
-        public ITexture CreateTexture(TextureCreateInfo info)
+        public ITexture CreateTexture(TextureCreateInfo info, float scaleFactor)
         {
-            return info.Target == Target.TextureBuffer ? new TextureBuffer(info) : new TextureStorage(this, info).CreateDefaultView();
+            return info.Target == Target.TextureBuffer ? new TextureBuffer(info) : new TextureStorage(this, info, scaleFactor).CreateDefaultView();
         }
 
         public void DeleteBuffer(BufferHandle buffer)
