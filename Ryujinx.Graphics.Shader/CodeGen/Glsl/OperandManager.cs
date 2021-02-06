@@ -3,6 +3,7 @@ using Ryujinx.Graphics.Shader.StructuredIr;
 using Ryujinx.Graphics.Shader.Translation;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 using static Ryujinx.Graphics.Shader.StructuredIr.InstructionInfo;
 
@@ -92,18 +93,21 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             return name;
         }
 
-        public string GetExpression(AstOperand operand, ShaderStage stage)
+        public string GetExpression(AstOperand operand, ShaderConfig config, bool cbIndexable)
         {
             switch (operand.Type)
             {
+                case OperandType.Argument:
+                    return GetArgumentName(operand.Value);
+
                 case OperandType.Attribute:
-                    return GetAttributeName(operand, stage);
+                    return GetAttributeName(operand, config);
 
                 case OperandType.Constant:
                     return NumberFormatter.FormatInt(operand.Value);
 
                 case OperandType.ConstantBuffer:
-                    return GetConstantBufferName(operand.CbufSlot, operand.CbufOffset, stage);
+                    return GetConstantBufferName(operand.CbufSlot, operand.CbufOffset, config.Stage, cbIndexable);
 
                 case OperandType.LocalVariable:
                     return _locals[operand];
@@ -115,13 +119,9 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             throw new ArgumentException($"Invalid operand type \"{operand.Type}\".");
         }
 
-        public static string GetConstantBufferName(int slot, int offset, ShaderStage stage)
+        public static string GetConstantBufferName(int slot, int offset, ShaderStage stage, bool cbIndexable)
         {
-            string ubName = GetUbName(stage, slot);
-
-            ubName += "[" + (offset >> 2) + "]";
-
-            return ubName + "." + GetSwizzleMask(offset & 3);
+            return $"{GetUbName(stage, slot, cbIndexable)}[{offset >> 2}].{GetSwizzleMask(offset & 3)}";
         }
 
         private static string GetVec4Indexed(string vectorName, string indexExpr)
@@ -134,26 +134,22 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             return $"({result})";
         }
 
-        public static string GetConstantBufferName(IAstNode slot, string offsetExpr, ShaderStage stage)
+        public static string GetConstantBufferName(int slot, string offsetExpr, ShaderStage stage, bool cbIndexable)
         {
-            // Non-constant slots are not supported.
-            // It is expected that upstream stages are never going to generate non-constant
-            // slot access.
-            AstOperand operand = (AstOperand)slot;
-
-            string ubName = GetUbName(stage, operand.Value);
-
-            string index0 = "[" + offsetExpr + " >> 2]";
-
-            return GetVec4Indexed(ubName + index0, offsetExpr + " & 3");
+            return GetVec4Indexed(GetUbName(stage, slot, cbIndexable) + $"[{offsetExpr} >> 2]", offsetExpr + " & 3");
         }
 
-        public static string GetOutAttributeName(AstOperand attr, ShaderStage stage)
+        public static string GetConstantBufferName(string slotExpr, string offsetExpr, ShaderStage stage)
         {
-            return GetAttributeName(attr, stage, isOutAttr: true);
+            return GetVec4Indexed(GetUbName(stage, slotExpr) + $"[{offsetExpr} >> 2]", offsetExpr + " & 3");
         }
 
-        public static string GetAttributeName(AstOperand attr, ShaderStage stage, bool isOutAttr = false, string indexExpr = "0")
+        public static string GetOutAttributeName(AstOperand attr, ShaderConfig config)
+        {
+            return GetAttributeName(attr, config, isOutAttr: true);
+        }
+
+        public static string GetAttributeName(AstOperand attr, ShaderConfig config, bool isOutAttr = false, string indexExpr = "0")
         {
             int value = attr.Value;
 
@@ -167,14 +163,28 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
                     ? DefaultNames.OAttributePrefix
                     : DefaultNames.IAttributePrefix;
 
-                string name = $"{prefix}{(value >> 4)}_{swzMask}";
-
-                if (stage == ShaderStage.Geometry && !isOutAttr)
+                if ((config.Flags & TranslationFlags.Feedback) != 0)
                 {
-                    name += $"[{indexExpr}]";
-                }
+                    string name = $"{prefix}{(value >> 4)}_{swzMask}";
 
-                return name;
+                    if (config.Stage == ShaderStage.Geometry && !isOutAttr)
+                    {
+                        name += $"[{indexExpr}]";
+                    }
+
+                    return name;
+                }
+                else
+                {
+                    string name = $"{prefix}{(value >> 4)}";
+
+                    if (config.Stage == ShaderStage.Geometry && !isOutAttr)
+                    {
+                        name += $"[{indexExpr}]";
+                    }
+
+                    return name + '.' + swzMask;
+                }
             }
             else
             {
@@ -187,7 +197,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
                 else if (_builtInAttributes.TryGetValue(value & ~3, out BuiltInAttribute builtInAttr))
                 {
                     // TODO: There must be a better way to handle this...
-                    if (stage == ShaderStage.Fragment)
+                    if (config.Stage == ShaderStage.Fragment)
                     {
                         switch (value & ~3)
                         {
@@ -200,7 +210,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
 
                     string name = builtInAttr.Name;
 
-                    if (stage == ShaderStage.Geometry && !isOutAttr)
+                    if (config.Stage == ShaderStage.Geometry && (value & AttributeConsts.SpecialMask) == 0 && !isOutAttr)
                     {
                         name = $"gl_in[{indexExpr}].{name}";
                     }
@@ -214,33 +224,28 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             return isOutAttr ? "// bad_attr0x" + value.ToString("X") : "0.0";
         }
 
-        public static string GetUbName(ShaderStage stage, int slot)
+        public static string GetUbName(ShaderStage stage, int slot, bool cbIndexable)
         {
-            string ubName = GetShaderStagePrefix(stage);
+            if (cbIndexable)
+            {
+                return GetUbName(stage, NumberFormatter.FormatInt(slot, VariableType.S32));
+            }
 
-            ubName += "_" + DefaultNames.UniformNamePrefix + slot;
+            return $"{GetShaderStagePrefix(stage)}_{DefaultNames.UniformNamePrefix}{slot}_{DefaultNames.UniformNameSuffix}";
+        }
 
-            return ubName + "_" + DefaultNames.UniformNameSuffix;
+        private static string GetUbName(ShaderStage stage, string slotExpr)
+        {
+            return $"{GetShaderStagePrefix(stage)}_{DefaultNames.UniformNamePrefix}[{slotExpr}].{DefaultNames.DataName}";
         }
 
         public static string GetSamplerName(ShaderStage stage, AstTextureOperation texOp, string indexExpr)
         {
-            string suffix;
+            string suffix = texOp.CbufSlot < 0 ? $"_tcb_{texOp.Handle:X}" : $"_cb{texOp.CbufSlot}_{texOp.Handle:X}";
 
-            if ((texOp.Flags & TextureFlags.Bindless) != 0)
+            if ((texOp.Type & SamplerType.Indexed) != 0)
             {
-                AstOperand operand = texOp.GetSource(0) as AstOperand;
-
-                suffix = "_cb" + operand.CbufSlot + "_" + operand.CbufOffset;
-            }
-            else
-            {
-                suffix = texOp.Handle.ToString("X");
-
-                if ((texOp.Type & SamplerType.Indexed) != 0)
-                {
-                    suffix += $"a[{indexExpr}]";
-                }
+                suffix += $"a[{indexExpr}]";
             }
 
             return GetShaderStagePrefix(stage) + "_" + DefaultNames.SamplerNamePrefix + suffix;
@@ -248,7 +253,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
 
         public static string GetImageName(ShaderStage stage, AstTextureOperation texOp, string indexExpr)
         {
-            string suffix = texOp.Handle.ToString("X");
+            string suffix = texOp.CbufSlot < 0 ? $"_tcb_{texOp.Handle:X}_{texOp.Format.ToGlslFormat()}" : $"_cb{texOp.CbufSlot}_{texOp.Handle:X}_{texOp.Format.ToGlslFormat()}";
 
             if ((texOp.Type & SamplerType.Indexed) != 0)
             {
@@ -275,7 +280,12 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             return "xyzw"[value];
         }
 
-        public static VariableType GetNodeDestType(IAstNode node)
+        public static string GetArgumentName(int argIndex)
+        {
+            return $"{DefaultNames.ArgumentNamePrefix}{argIndex}";
+        }
+
+        public static VariableType GetNodeDestType(CodeGenContext context, IAstNode node)
         {
             if (node is AstOperation operation)
             {
@@ -285,6 +295,14 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
                 if (operation.Inst == Instruction.LoadAttribute)
                 {
                     return GetOperandVarType((AstOperand)operation.GetSource(0));
+                }
+                else if (operation.Inst == Instruction.Call)
+                {
+                    AstOperand funcId = (AstOperand)operation.GetSource(0);
+
+                    Debug.Assert(funcId.Type == OperandType.Constant);
+
+                    return context.GetFunction(funcId.Value).ReturnType;
                 }
                 else if (operation is AstTextureOperation texOp &&
                          (texOp.Inst == Instruction.ImageLoad ||
@@ -297,6 +315,13 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             }
             else if (node is AstOperand operand)
             {
+                if (operand.Type == OperandType.Argument)
+                {
+                    int argIndex = operand.Value;
+
+                    return context.CurrentFunction.GetArgumentType(argIndex);
+                }
+
                 return GetOperandVarType(operand);
             }
             else

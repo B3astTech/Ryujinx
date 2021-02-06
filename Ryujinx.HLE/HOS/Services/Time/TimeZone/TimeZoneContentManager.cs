@@ -1,6 +1,7 @@
 ﻿using LibHac;
 using LibHac.Common;
 using LibHac.Fs;
+using LibHac.Fs.Fsa;
 using LibHac.FsSystem;
 using LibHac.FsSystem.NcaUtils;
 using Ryujinx.Common.Logging;
@@ -22,7 +23,7 @@ namespace Ryujinx.HLE.HOS.Services.Time.TimeZone
     {
         private const long TimeZoneBinaryTitleId = 0x010000000000080E;
 
-        private readonly string TimeZoneSystemTitleMissingErrorMessage = "TimeZoneBinary system title not found! TimeZone conversions will not work, provide the system archive to fix this error. (See https://github.com/Ryujinx/Ryujinx#requirements for more information)";
+        private readonly string TimeZoneSystemTitleMissingErrorMessage = "TimeZoneBinary system title not found! TimeZone conversions will not work, provide the system archive to fix this error. (See https://github.com/Ryujinx/Ryujinx/wiki/Ryujinx-Setup-&-Configuration-Guide#initial-setup-continued---installation-of-firmware for more information)";
 
         private VirtualFileSystem   _virtualFileSystem;
         private IntegrityCheckLevel _fsIntegrityCheckLevel;
@@ -55,7 +56,7 @@ namespace Ryujinx.HLE.HOS.Services.Time.TimeZone
                 return locationName;
             }
 
-            Logger.PrintWarning(LogClass.ServiceTime, $"Invalid device TimeZone {locationName}, switching back to UTC");
+            Logger.Warning?.Print(LogClass.ServiceTime, $"Invalid device TimeZone {locationName}, switching back to UTC");
 
             ConfigurationState.Instance.System.TimeZone.Value = "UTC";
 
@@ -114,7 +115,7 @@ namespace Ryujinx.HLE.HOS.Services.Time.TimeZone
             {
                 LocationNameCache = new string[] { "UTC" };
 
-                Logger.PrintError(LogClass.ServiceTime, TimeZoneSystemTitleMissingErrorMessage);
+                Logger.Error?.Print(LogClass.ServiceTime, TimeZoneSystemTitleMissingErrorMessage);
             }
         }
 
@@ -141,7 +142,7 @@ namespace Ryujinx.HLE.HOS.Services.Time.TimeZone
 
                     if (romfs.OpenFile(out IFile tzif, $"/zoneinfo/{locName}".ToU8Span(), OpenMode.Read).IsFailure())
                     {
-                        Logger.PrintError(LogClass.ServiceTime, $"Error opening /zoneinfo/{locName}");
+                        Logger.Error?.Print(LogClass.ServiceTime, $"Error opening /zoneinfo/{locName}");
                         continue;
                     }
 
@@ -168,7 +169,7 @@ namespace Ryujinx.HLE.HOS.Services.Time.TimeZone
                         }
                         else
                         {
-                            Logger.PrintError(LogClass.ServiceTime, $"Couldn't find UTC offset for zone {locName}");
+                            Logger.Error?.Print(LogClass.ServiceTime, $"Couldn't find UTC offset for zone {locName}");
                             continue;
                         }
 

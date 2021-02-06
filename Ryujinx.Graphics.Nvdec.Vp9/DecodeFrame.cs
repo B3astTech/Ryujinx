@@ -374,11 +374,7 @@ namespace Ryujinx.Graphics.Nvdec.Vp9
             } while (--bH != 0);
         }
 
-        [StructLayout(LayoutKind.Sequential, Size = 80 * 2 * 80 * 2)]
-        struct McBufHigh
-        {
-        }
-
+        [SkipLocalsInit]
         private static unsafe void ExtendAndPredict(
             byte* bufPtr1,
             int preBufStride,
@@ -402,8 +398,7 @@ namespace Ryujinx.Graphics.Nvdec.Vp9
             int xs,
             int ys)
         {
-            McBufHigh mcBufHighStruct;
-            ushort* mcBufHigh = (ushort*)Unsafe.AsPointer(ref mcBufHighStruct); // Avoid zero initialization.
+            ushort* mcBufHigh = stackalloc ushort[80 * 2 * 80 * 2];
             if (xd.CurBuf.HighBd)
             {
                 HighBuildMcBorder(bufPtr1, preBufStride, mcBufHigh, bW, x0, y0, bW, bH, frameWidth, frameHeight);
@@ -1149,7 +1144,7 @@ namespace Ryujinx.Graphics.Nvdec.Vp9
                     ref TileWorkerData tileData = ref cm.TileWorkerData[tileCols * tileRow + tileCol];
                     tileData.Xd = cm.Mb;
                     tileData.Xd.Corrupted = false;
-                    tileData.Xd.Counts = cm.FrameParallelDecodingMode ? Ptr<Vp9BackwardUpdates>.Null : cm.Counts;
+                    tileData.Xd.Counts = cm.Counts;
                     tileData.Dqcoeff = new Array32<Array32<int>>();
                     tileData.Xd.Tile.Init(ref cm, tileRow, tileCol);
                     SetupTokenDecoder(buf.Data, buf.Size, ref cm.Error, ref tileData.BitReader);

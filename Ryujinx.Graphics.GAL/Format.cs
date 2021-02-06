@@ -82,6 +82,8 @@ namespace Ryujinx.Graphics.GAL
         Bc7Srgb,
         Bc6HSfloat,
         Bc6HUfloat,
+        Etc2RgbaUnorm,
+        Etc2RgbaSrgb,
         R8Uscaled,
         R8Sscaled,
         R16Uscaled,
@@ -343,36 +345,23 @@ namespace Ryujinx.Graphics.GAL
         }
 
         /// <summary>
-        /// Checks if the texture format only has one component.
+        /// Checks if the texture format is a BC4 compressed format.
         /// </summary>
         /// <param name="format">Texture format</param>
-        /// <returns>True if the texture format only has one component, false otherwise</returns>
-        public static bool HasOneComponent(this Format format)
+        /// <returns>True if the texture format is a BC4 compressed format, false otherwise</returns>
+        public static bool IsBc4(this Format format)
         {
-            switch (format)
-            {
-                case Format.R8Unorm:
-                case Format.R8Snorm:
-                case Format.R8Uint:
-                case Format.R8Sint:
-                case Format.R16Float:
-                case Format.R16Unorm:
-                case Format.R16Snorm:
-                case Format.R16Uint:
-                case Format.R16Sint:
-                case Format.R32Float:
-                case Format.R32Uint:
-                case Format.R32Sint:
-                case Format.R8Uscaled:
-                case Format.R8Sscaled:
-                case Format.R16Uscaled:
-                case Format.R16Sscaled:
-                case Format.R32Uscaled:
-                case Format.R32Sscaled:
-                    return true;
-            }
+            return format == Format.Bc4Unorm || format == Format.Bc4Snorm;
+        }
 
-            return false;
+        /// <summary>
+        /// Checks if the texture format is a BC5 compressed format.
+        /// </summary>
+        /// <param name="format">Texture format</param>
+        /// <returns>True if the texture format is a BC5 compressed format, false otherwise</returns>
+        public static bool IsBc5(this Format format)
+        {
+            return format == Format.Bc5Unorm || format == Format.Bc5Snorm;
         }
     }
 }

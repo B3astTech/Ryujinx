@@ -6,13 +6,6 @@ namespace Ryujinx.Graphics.Gpu.Engine
 {
     partial class Methods
     {
-        enum ConditionalRenderEnabled
-        {
-            False,
-            True,
-            Host
-        }
-
         /// <summary>
         /// Checks if draws and clears should be performed, according
         /// to currently set conditional rendering conditions.
@@ -37,7 +30,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
                     return CounterCompare(condState.Address.Pack(), false);
             }
 
-            Logger.PrintWarning(LogClass.Gpu, $"Invalid conditional render condition \"{condState.Condition}\".");
+            Logger.Warning?.Print(LogClass.Gpu, $"Invalid conditional render condition \"{condState.Condition}\".");
 
             return ConditionalRenderEnabled.True;
         }
@@ -78,11 +71,6 @@ namespace Ryujinx.Graphics.Gpu.Engine
             ICounterEvent evt = FindEvent(gpuVa);
             ICounterEvent evt2 = FindEvent(gpuVa + 16);
 
-            if (evt == null && evt2 == null)
-            {
-                return ConditionalRenderEnabled.False;
-            }
-
             bool useHost;
 
             if (evt != null && evt2 == null)
@@ -93,9 +81,13 @@ namespace Ryujinx.Graphics.Gpu.Engine
             {
                 useHost = _context.Renderer.Pipeline.TryHostConditionalRendering(evt2, _context.MemoryManager.Read<ulong>(gpuVa), isEqual);
             }
-            else
+            else if (evt != null && evt2 != null)
             {
                 useHost = _context.Renderer.Pipeline.TryHostConditionalRendering(evt, evt2, isEqual);
+            }
+            else
+            {
+                useHost = false;
             }
 
             if (useHost)

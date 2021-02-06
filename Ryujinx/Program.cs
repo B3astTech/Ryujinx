@@ -1,14 +1,18 @@
 using ARMeilleure.Translation.PTC;
 using Gtk;
+using OpenTK;
+using Ryujinx.Common.Configuration;
 using Ryujinx.Common.Logging;
+using Ryujinx.Common.System;
 using Ryujinx.Common.SystemInfo;
 using Ryujinx.Configuration;
-using Ryujinx.Debugger.Profiler;
+using Ryujinx.Modules;
 using Ryujinx.Ui;
-using OpenTK;
+using Ryujinx.Ui.Widgets;
 using System;
 using System.IO;
 using System.Reflection;
+using System.Threading.Tasks;
 
 namespace Ryujinx
 {
@@ -20,10 +24,42 @@ namespace Ryujinx
 
         static void Main(string[] args)
         {
+            // Parse Arguments.
+            string launchPathArg      = null;
+            string baseDirPathArg     = null;
+            bool   startFullscreenArg = false;
+
+            for (int i = 0; i < args.Length; ++i)
+            {
+                string arg = args[i];
+
+                if (arg == "-r" || arg == "--root-data-dir")
+                {
+                    if (i + 1 >= args.Length)
+                    {
+                        Logger.Error?.Print(LogClass.Application, $"Invalid option '{arg}'");
+
+                        continue;
+                    }
+
+                    baseDirPathArg = args[++i];
+                }
+                else if (arg == "-f" || arg == "--fullscreen")
+                {
+                    startFullscreenArg = true;
+                }
+                else if (launchPathArg == null)
+                {
+                    launchPathArg = arg;
+                }
+            }
+
+            // Delete backup files after updating.
+            Task.Run(Updater.CleanupUpdate);
+
             Toolkit.Init(new ToolkitOptions
             {
-                Backend = PlatformBackend.PreferNative,
-                EnableHighResolution = true
+                Backend = PlatformBackend.PreferNative
             });
 
             Version = Assembly.GetEntryAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>().InformationalVersion;
@@ -33,22 +69,27 @@ namespace Ryujinx
             string systemPath = Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.Machine);
             Environment.SetEnvironmentVariable("Path", $"{Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin")};{systemPath}");
 
-            GLib.ExceptionManager.UnhandledException += Glib_UnhandledException;
+            // Hook unhandled exception and process exit events.
+            GLib.ExceptionManager.UnhandledException   += (GLib.UnhandledExceptionArgs e)                => ProcessUnhandledException(e.ExceptionObject as Exception, e.IsTerminating);
+            AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledExceptionEventArgs e) => ProcessUnhandledException(e.ExceptionObject as Exception, e.IsTerminating);
+            AppDomain.CurrentDomain.ProcessExit        += (object sender, EventArgs e)                   => Exit();
 
-            // Initialize the configuration
+            // Setup base data directory.
+            AppDataManager.Initialize(baseDirPathArg);
+
+            // Initialize the configuration.
             ConfigurationState.Initialize();
 
-            // Initialize the logger system
+            // Initialize the logger system.
             LoggerModule.Initialize();
 
-            // Initialize Discord integration
+            // Initialize Discord integration.
             DiscordIntegrationModule.Initialize();
 
-            string localConfigurationPath  = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config.json");
-            string globalBasePath          = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Ryujinx");
-            string globalConfigurationPath = Path.Combine(globalBasePath, "Config.json");
+            string localConfigurationPath   = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config.json");
+            string appDataConfigurationPath = Path.Combine(AppDataManager.BaseDirPath,            "Config.json");
 
-            // Now load the configuration as the other subsystems are now registered
+            // Now load the configuration as the other subsystems are now registered.
             if (File.Exists(localConfigurationPath))
             {
                 ConfigurationPath = localConfigurationPath;
@@ -57,70 +98,106 @@ namespace Ryujinx
 
                 ConfigurationState.Instance.Load(configurationFileFormat, ConfigurationPath);
             }
-            else if (File.Exists(globalConfigurationPath))
+            else if (File.Exists(appDataConfigurationPath))
             {
-                ConfigurationPath = globalConfigurationPath;
+                ConfigurationPath = appDataConfigurationPath;
 
-                ConfigurationFileFormat configurationFileFormat = ConfigurationFileFormat.Load(globalConfigurationPath);
+                ConfigurationFileFormat configurationFileFormat = ConfigurationFileFormat.Load(appDataConfigurationPath);
 
                 ConfigurationState.Instance.Load(configurationFileFormat, ConfigurationPath);
             }
             else
             {
-                // No configuration, we load the default values and save it on disk
-                ConfigurationPath = globalConfigurationPath;
-
-                // Make sure to create the Ryujinx directory if needed.
-                Directory.CreateDirectory(globalBasePath);
+                // No configuration, we load the default values and save it on disk.
+                ConfigurationPath = appDataConfigurationPath;
 
                 ConfigurationState.Instance.LoadDefault();
-                ConfigurationState.Instance.ToFileFormat().SaveConfig(globalConfigurationPath);
+                ConfigurationState.Instance.ToFileFormat().SaveConfig(appDataConfigurationPath);
             }
 
-            Logger.PrintInfo(LogClass.Application, $"Ryujinx Version: {Version}");
+            if (startFullscreenArg)
+            {
+                ConfigurationState.Instance.Ui.StartFullscreen.Value = true;
+            }
 
-            Logger.PrintInfo(LogClass.Application, $"Operating System: {SystemInfo.Instance.OsDescription}");
-            Logger.PrintInfo(LogClass.Application, $"CPU: {SystemInfo.Instance.CpuName}");
-            Logger.PrintInfo(LogClass.Application, $"Total RAM: {SystemInfo.Instance.RamSizeInMB}");
+            // Logging system informations.
+            PrintSystemInfo();
 
-            Profile.Initialize();
-
+            // Initialize Gtk.
             Application.Init();
 
-            string globalProdKeysPath = Path.Combine(globalBasePath, "system", "prod.keys");
-            string userProfilePath    = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".switch", "prod.keys");
-            if (!File.Exists(globalProdKeysPath) && !File.Exists(userProfilePath) && !Migration.IsMigrationNeeded())
+            // Check if keys exists.
+            bool hasGlobalProdKeys = File.Exists(Path.Combine(AppDataManager.KeysDirPath, "prod.keys"));
+            bool hasAltProdKeys    = !AppDataManager.IsCustomBasePath && File.Exists(Path.Combine(AppDataManager.KeysDirPathAlt, "prod.keys"));
+            if (!hasGlobalProdKeys && !hasAltProdKeys)
             {
-                GtkDialog.CreateWarningDialog("Key file was not found", "Please refer to `KEYS.md` for more info");
+                UserErrorDialog.CreateUserErrorDialog(UserError.NoKeys);
             }
 
+            // Force dedicated GPU if we can.
+            ForceDedicatedGpu.Nvidia();
+
+            // Show the main window UI.
             MainWindow mainWindow = new MainWindow();
             mainWindow.Show();
 
-            if (args.Length == 1)
+            if (launchPathArg != null)
             {
-                mainWindow.LoadApplication(args[0]);
+                mainWindow.LoadApplication(launchPathArg);
+            }
+
+            if (ConfigurationState.Instance.CheckUpdatesOnStart.Value && Updater.CanUpdate(false))
+            {
+                _ = Updater.BeginParse(mainWindow, false);
             }
 
             Application.Run();
         }
 
-        private static void Glib_UnhandledException(GLib.UnhandledExceptionArgs e)
+        private static void PrintSystemInfo()
         {
-            Exception exception = e.ExceptionObject as Exception;
+            Logger.Notice.Print(LogClass.Application, $"Ryujinx Version: {Version}");
+            Logger.Notice.Print(LogClass.Application, $"Operating System: {SystemInfo.Instance.OsDescription}");
+            Logger.Notice.Print(LogClass.Application, $"CPU: {SystemInfo.Instance.CpuName}");
+            Logger.Notice.Print(LogClass.Application, $"Total RAM: {SystemInfo.Instance.RamSizeInMB}");
 
-            Logger.PrintError(LogClass.Application, $"Unhandled exception caught: {exception}");
+            var enabledLogs = Logger.GetEnabledLevels();
+            Logger.Notice.Print(LogClass.Application, $"Logs Enabled: {(enabledLogs.Count == 0 ? "<None>" : string.Join(", ", enabledLogs))}");
 
+            if (AppDataManager.IsCustomBasePath)
+            {
+                Logger.Notice.Print(LogClass.Application, $"Custom Data Directory: {AppDataManager.BaseDirPath}");
+            }
+        }
+
+        private static void ProcessUnhandledException(Exception ex, bool isTerminating)
+        {
             Ptc.Close();
             PtcProfiler.Stop();
 
-            if (e.IsTerminating)
-            {
-                Logger.Shutdown();
+            string message = $"Unhandled exception caught: {ex}";
 
-                Ptc.Dispose();
-                PtcProfiler.Dispose();
+            Logger.Error?.PrintMsg(LogClass.Application, message);
+
+            if (Logger.Error == null)
+            {
+                Logger.Notice.PrintMsg(LogClass.Application, message);
             }
+
+            if (isTerminating)
+            {
+                Exit();
+            }
+        }
+
+        public static void Exit()
+        {
+            DiscordIntegrationModule.Exit();
+
+            Ptc.Dispose();
+            PtcProfiler.Dispose();
+
+            Logger.Shutdown();
         }
     }
 }

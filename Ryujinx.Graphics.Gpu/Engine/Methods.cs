@@ -5,7 +5,9 @@ using Ryujinx.Graphics.Gpu.Memory;
 using Ryujinx.Graphics.Gpu.Shader;
 using Ryujinx.Graphics.Gpu.State;
 using Ryujinx.Graphics.Shader;
+using Ryujinx.Graphics.Texture;
 using System;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace Ryujinx.Graphics.Gpu.Engine
@@ -58,6 +60,8 @@ namespace Ryujinx.Graphics.Gpu.Engine
             TextureManager = new TextureManager(context);
 
             context.MemoryManager.MemoryUnmapped += _counterCache.MemoryUnmappedHandler;
+            context.MemoryManager.MemoryUnmapped += TextureManager.MemoryUnmappedHandler;
+            context.MemoryManager.MemoryUnmapped += BufferManager.MemoryUnmappedHandler;
         }
 
         /// <summary>
@@ -77,7 +81,6 @@ namespace Ryujinx.Graphics.Gpu.Engine
             state.RegisterCallback(MethodOffset.CopyTexture, CopyTexture);
 
             state.RegisterCallback(MethodOffset.TextureBarrier,      TextureBarrier);
-            state.RegisterCallback(MethodOffset.InvalidateTextures,  InvalidateTextures);
             state.RegisterCallback(MethodOffset.TextureBarrierTiled, TextureBarrierTiled);
 
             state.RegisterCallback(MethodOffset.VbElementU8,  VbElementU8);
@@ -86,8 +89,12 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
             state.RegisterCallback(MethodOffset.ResetCounter, ResetCounter);
 
-            state.RegisterCallback(MethodOffset.DrawEnd,   DrawEnd);
-            state.RegisterCallback(MethodOffset.DrawBegin, DrawBegin);
+            state.RegisterCallback(MethodOffset.DrawEnd,                      DrawEnd);
+            state.RegisterCallback(MethodOffset.DrawBegin,                    DrawBegin);
+            state.RegisterCallback(MethodOffset.DrawIndexedSmall,             DrawIndexedSmall);
+            state.RegisterCallback(MethodOffset.DrawIndexedSmall2,            DrawIndexedSmall2);
+            state.RegisterCallback(MethodOffset.DrawIndexedSmallIncInstance,  DrawIndexedSmallIncInstance);
+            state.RegisterCallback(MethodOffset.DrawIndexedSmallIncInstance2, DrawIndexedSmallIncInstance2);
 
             state.RegisterCallback(MethodOffset.IndexBufferCount, SetIndexBufferCount);
 
@@ -110,7 +117,9 @@ namespace Ryujinx.Graphics.Gpu.Engine
         /// Updates host state based on the current guest GPU state.
         /// </summary>
         /// <param name="state">Guest GPU state</param>
-        private void UpdateState(GpuState state)
+        /// <param name="firstIndex">Index of the first index buffer element used on the draw</param>
+        /// <param name="indexCount">Number of index buffer elements used on the draw</param>
+        private void UpdateState(GpuState state, int firstIndex, int indexCount)
         {
             bool tfEnable = state.Get<Boolean32>(MethodOffset.TfEnable);
 
@@ -162,6 +171,13 @@ namespace Ryujinx.Graphics.Gpu.Engine
             if (state.QueryModified(MethodOffset.ViewVolumeClipControl))
             {
                 UpdateDepthClampState(state);
+            }
+
+            if (state.QueryModified(MethodOffset.AlphaTestEnable,
+                                    MethodOffset.AlphaTestRef,
+                                    MethodOffset.AlphaTestFunc))
+            {
+                UpdateAlphaTestState(state);
             }
 
             if (state.QueryModified(MethodOffset.DepthTestEnable,
@@ -225,7 +241,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
             if (state.QueryModified(MethodOffset.IndexBufferState))
             {
-                UpdateIndexBufferState(state);
+                UpdateIndexBufferState(state, firstIndex, indexCount);
             }
 
             if (state.QueryModified(MethodOffset.VertexBufferDrawState,
@@ -265,7 +281,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
             if (tfEnable && !_prevTfEnable)
             {
-                _context.Renderer.Pipeline.BeginTransformFeedback(PrimitiveType.Convert());
+                _context.Renderer.Pipeline.BeginTransformFeedback(Topology);
                 _prevTfEnable = true;
             }
         }
@@ -318,7 +334,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
                     SbDescriptor sbDescriptor = _context.PhysicalMemory.Read<SbDescriptor>(sbDescAddress);
 
-                    BufferManager.SetGraphicsStorageBuffer(stage, sb.Slot, sbDescriptor.PackAddress(), (uint)sbDescriptor.Size);
+                    BufferManager.SetGraphicsStorageBuffer(stage, sb.Slot, sbDescriptor.PackAddress(), (uint)sbDescriptor.Size, sb.Flags);
                 }
             }
         }
@@ -340,6 +356,9 @@ namespace Ryujinx.Graphics.Gpu.Engine
             int samplesInX = msaaMode.SamplesInX();
             int samplesInY = msaaMode.SamplesInY();
 
+            var scissor = state.Get<ScreenScissorState>(MethodOffset.ScreenScissorState);
+            Size sizeHint = new Size(scissor.X + scissor.Width, scissor.Y + scissor.Height, 1);
+
             bool changedScale = false;
 
             for (int index = 0; index < Constants.TotalRenderTargets; index++)
@@ -355,7 +374,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
                     continue;
                 }
 
-                Texture color = TextureManager.FindOrCreateTexture(colorState, samplesInX, samplesInY);
+                Texture color = TextureManager.FindOrCreateTexture(colorState, samplesInX, samplesInY, sizeHint);
 
                 changedScale |= TextureManager.SetRenderTargetColor(index, color);
 
@@ -372,9 +391,9 @@ namespace Ryujinx.Graphics.Gpu.Engine
             if (dsEnable)
             {
                 var dsState = state.Get<RtDepthStencilState>(MethodOffset.RtDepthStencilState);
-                var dsSize  = state.Get<Size3D>             (MethodOffset.RtDepthStencilSize);
+                var dsSize  = state.Get<Size3D>(MethodOffset.RtDepthStencilSize);
 
-                depthStencil = TextureManager.FindOrCreateTexture(dsState, dsSize, samplesInX, samplesInY);
+                depthStencil = TextureManager.FindOrCreateTexture(dsState, dsSize, samplesInX, samplesInY, sizeHint);
             }
 
             changedScale |= TextureManager.SetRenderTargetDepthStencil(depthStencil);
@@ -417,8 +436,6 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
                 bool enable = scissor.Enable && (scissor.X1 != 0 || scissor.Y1 != 0 || scissor.X2 != 0xffff || scissor.Y2 != 0xffff);
 
-                _context.Renderer.Pipeline.SetScissorEnable(index, enable);
-
                 if (enable)
                 {
                     int x = scissor.X1;
@@ -435,7 +452,11 @@ namespace Ryujinx.Graphics.Gpu.Engine
                         height = (int)Math.Ceiling(height * scale);
                     }
 
-                    _context.Renderer.Pipeline.SetScissor(index, x, y, width, height);
+                    _context.Renderer.Pipeline.SetScissor(index, true, x, y, width, height);
+                }
+                else
+                {
+                    _context.Renderer.Pipeline.SetScissor(index, false, 0, 0, 0, 0);
                 }
             }
         }
@@ -448,6 +469,18 @@ namespace Ryujinx.Graphics.Gpu.Engine
         {
             ViewVolumeClipControl clip = state.Get<ViewVolumeClipControl>(MethodOffset.ViewVolumeClipControl);
             _context.Renderer.Pipeline.SetDepthClamp((clip & ViewVolumeClipControl.DepthClampDisabled) == 0);
+        }
+
+        /// <summary>
+        /// Updates host alpha test state based on current GPU state.
+        /// </summary>
+        /// <param name="state">Current GPU state</param>
+        private void UpdateAlphaTestState(GpuState state)
+        {
+            _context.Renderer.Pipeline.SetAlphaTest(
+                state.Get<Boolean32>(MethodOffset.AlphaTestEnable),
+                state.Get<float>(MethodOffset.AlphaTestRef),
+                state.Get<CompareOp>(MethodOffset.AlphaTestFunc));
         }
 
         /// <summary>
@@ -468,25 +501,12 @@ namespace Ryujinx.Graphics.Gpu.Engine
         /// <param name="state">Current GPU state</param>
         private void UpdateViewportTransform(GpuState state)
         {
-            DepthMode depthMode = state.Get<DepthMode>(MethodOffset.DepthMode);
+            var yControl = state.Get<YControl> (MethodOffset.YControl);
+            var face     = state.Get<FaceState>(MethodOffset.FaceState);
 
-            _context.Renderer.Pipeline.SetDepthMode(depthMode);
+            UpdateFrontFace(yControl, face.FrontFace);
 
-            YControl yControl = state.Get<YControl>(MethodOffset.YControl);
-
-            bool   flipY  = yControl.HasFlag(YControl.NegateY);
-            Origin origin = yControl.HasFlag(YControl.TriangleRastFlip) ? Origin.LowerLeft : Origin.UpperLeft;
-
-            _context.Renderer.Pipeline.SetOrigin(origin);
-
-            // The triangle rast flip flag only affects rasterization, the viewport is not flipped.
-            // Setting the origin mode to upper left on the host, however, not only affects rasterization,
-            // but also flips the viewport.
-            // We negate the effects of flipping the viewport by flipping it again using the viewport swizzle.
-            if (origin == Origin.UpperLeft)
-            {
-                flipY = !flipY;
-            }
+            bool flipY = yControl.HasFlag(YControl.NegateY);
 
             Span<Viewport> viewports = stackalloc Viewport[Constants.TotalViewports];
 
@@ -495,11 +515,42 @@ namespace Ryujinx.Graphics.Gpu.Engine
                 var transform = state.Get<ViewportTransform>(MethodOffset.ViewportTransform, index);
                 var extents   = state.Get<ViewportExtents>  (MethodOffset.ViewportExtents,   index);
 
-                float x = transform.TranslateX - MathF.Abs(transform.ScaleX);
-                float y = transform.TranslateY - MathF.Abs(transform.ScaleY);
+                float scaleX = MathF.Abs(transform.ScaleX);
+                float scaleY = transform.ScaleY;
 
-                float width  = MathF.Abs(transform.ScaleX) * 2;
-                float height = MathF.Abs(transform.ScaleY) * 2;
+                if (flipY)
+                {
+                    scaleY = -scaleY;
+                }
+
+                if (!_context.Capabilities.SupportsViewportSwizzle && transform.UnpackSwizzleY() == ViewportSwizzle.NegativeY)
+                {
+                    scaleY = -scaleY;
+                }
+
+                if (index == 0)
+                {
+                    // Try to guess the depth mode being used on the high level API
+                    // based on current transform.
+                    // It is setup like so by said APIs:
+                    // If depth mode is ZeroToOne:
+                    //  TranslateZ = Near
+                    //  ScaleZ = Far - Near
+                    // If depth mode is MinusOneToOne:
+                    //  TranslateZ = (Near + Far) / 2
+                    //  ScaleZ = (Far - Near) / 2
+                    // DepthNear/Far are sorted such as that Near is always less than Far.
+                    DepthMode depthMode = extents.DepthNear != transform.TranslateZ &&
+                                          extents.DepthFar  != transform.TranslateZ ? DepthMode.MinusOneToOne : DepthMode.ZeroToOne;
+
+                    _context.Renderer.Pipeline.SetDepthMode(depthMode);
+                }
+
+                float x = transform.TranslateX - scaleX;
+                float y = transform.TranslateY - scaleY;
+
+                float width  = scaleX * 2;
+                float height = scaleY * 2;
 
                 float scale = TextureManager.RenderTargetScale;
                 if (scale != 1f)
@@ -517,34 +568,17 @@ namespace Ryujinx.Graphics.Gpu.Engine
                 ViewportSwizzle swizzleZ = transform.UnpackSwizzleZ();
                 ViewportSwizzle swizzleW = transform.UnpackSwizzleW();
 
-                if (transform.ScaleX < 0)
-                {
-                    swizzleX ^= ViewportSwizzle.NegativeFlag;
-                }
-
-                if (flipY)
-                {
-                    swizzleY ^= ViewportSwizzle.NegativeFlag;
-                }
-
-                if (transform.ScaleY < 0)
-                {
-                    swizzleY ^= ViewportSwizzle.NegativeFlag;
-                }
+                float depthNear = extents.DepthNear;
+                float depthFar  = extents.DepthFar;
 
                 if (transform.ScaleZ < 0)
                 {
-                    swizzleZ ^= ViewportSwizzle.NegativeFlag;
+                    float temp = depthNear;
+                    depthNear  = depthFar;
+                    depthFar   = temp;
                 }
 
-                viewports[index] = new Viewport(
-                    region,
-                    swizzleX,
-                    swizzleY,
-                    swizzleZ,
-                    swizzleW,
-                    extents.DepthNear,
-                    extents.DepthFar);
+                viewports[index] = new Viewport(region, swizzleX, swizzleY, swizzleZ, swizzleW, depthNear, depthFar);
             }
 
             _context.Renderer.Pipeline.SetViewports(0, viewports);
@@ -577,8 +611,8 @@ namespace Ryujinx.Graphics.Gpu.Engine
         /// <param name="state">Current GPU state</param>
         private void UpdateStencilTestState(GpuState state)
         {
-            var backMasks = state.Get<StencilBackMasks>    (MethodOffset.StencilBackMasks);
-            var test      = state.Get<StencilTestState>    (MethodOffset.StencilTestState);
+            var backMasks = state.Get<StencilBackMasks>(MethodOffset.StencilBackMasks);
+            var test      = state.Get<StencilTestState>(MethodOffset.StencilTestState);
             var backTest  = state.Get<StencilBackTestState>(MethodOffset.StencilBackTestState);
 
             CompareOp backFunc;
@@ -673,7 +707,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
                 if (!FormatTable.TryGetAttribFormat(vertexAttrib.UnpackFormat(), out Format format))
                 {
-                    Logger.PrintDebug(LogClass.Gpu, $"Invalid attribute format 0x{vertexAttrib.UnpackFormat():X}.");
+                    Logger.Debug?.Print(LogClass.Gpu, $"Invalid attribute format 0x{vertexAttrib.UnpackFormat():X}.");
 
                     format = Format.R32G32B32A32Float;
                 }
@@ -721,14 +755,13 @@ namespace Ryujinx.Graphics.Gpu.Engine
         /// Updates host index buffer binding based on guest GPU state.
         /// </summary>
         /// <param name="state">Current GPU state</param>
-        private void UpdateIndexBufferState(GpuState state)
+        /// <param name="firstIndex">Index of the first index buffer element used on the draw</param>
+        /// <param name="indexCount">Number of index buffer elements used on the draw</param>
+        private void UpdateIndexBufferState(GpuState state, int firstIndex, int indexCount)
         {
             var indexBuffer = state.Get<IndexBufferState>(MethodOffset.IndexBufferState);
 
-            _firstIndex = indexBuffer.First;
-            _indexCount = indexBuffer.Count;
-
-            if (_indexCount == 0)
+            if (indexCount == 0)
             {
                 return;
             }
@@ -737,7 +770,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
             // Do not use the end address to calculate the size, because
             // the result may be much larger than the real size of the index buffer.
-            ulong size = (ulong)(_firstIndex + _indexCount);
+            ulong size = (ulong)(firstIndex + indexCount);
 
             switch (indexBuffer.Type)
             {
@@ -785,7 +818,7 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
                 ulong size;
 
-                if (_inlineIndexCount != 0 || _drawIndexed || stride == 0 || instanced)
+                if (_ibStreamer.HasInlineIndexData || _drawIndexed || stride == 0 || instanced)
                 {
                     // This size may be (much) larger than the real vertex buffer size.
                     // Avoid calculating it this way, unless we don't have any other option.
@@ -812,11 +845,29 @@ namespace Ryujinx.Graphics.Gpu.Engine
         /// <param name="state">Current GPU state</param>
         private void UpdateFaceState(GpuState state)
         {
-            var face = state.Get<FaceState>(MethodOffset.FaceState);
+            var yControl = state.Get<YControl> (MethodOffset.YControl);
+            var face     = state.Get<FaceState>(MethodOffset.FaceState);
 
             _context.Renderer.Pipeline.SetFaceCulling(face.CullEnable, face.CullFace);
 
-            _context.Renderer.Pipeline.SetFrontFace(face.FrontFace);
+            UpdateFrontFace(yControl, face.FrontFace);
+        }
+
+        /// <summary>
+        /// Updates the front face based on the current front face and the origin.
+        /// </summary>
+        /// <param name="yControl">Y control register value, where the origin is located</param>
+        /// <param name="frontFace">Front face</param>
+        private void UpdateFrontFace(YControl yControl, FrontFace frontFace)
+        {
+            bool isUpperLeftOrigin = !yControl.HasFlag(YControl.TriangleRastFlip);
+
+            if (isUpperLeftOrigin)
+            {
+                frontFace = frontFace == FrontFace.CounterClockwise ? FrontFace.Clockwise : FrontFace.CounterClockwise;
+            }
+
+            _context.Renderer.Pipeline.SetFrontFace(frontFace);
         }
 
         /// <summary>
@@ -952,16 +1003,23 @@ namespace Ryujinx.Graphics.Gpu.Engine
 
             ShaderBundle gs = ShaderCache.GetGraphicsShader(state, addresses);
 
-            _vsUsesInstanceId = gs.Shaders[0]?.Program.Info.UsesInstanceId ?? false;
+            _vsUsesInstanceId = gs.Shaders[0]?.Info.UsesInstanceId ?? false;
+
+            int storageBufferBindingsCount = 0;
+            int uniformBufferBindingsCount = 0;
 
             for (int stage = 0; stage < Constants.ShaderStages; stage++)
             {
-                ShaderProgramInfo info = gs.Shaders[stage]?.Program.Info;
+                ShaderProgramInfo info = gs.Shaders[stage]?.Info;
 
                 _currentProgramInfo[stage] = info;
 
                 if (info == null)
                 {
+                    TextureManager.SetGraphicsTextures(stage, Array.Empty<TextureBindingInfo>());
+                    TextureManager.SetGraphicsImages(stage, Array.Empty<TextureBindingInfo>());
+                    BufferManager.SetGraphicsStorageBufferBindings(stage, null);
+                    BufferManager.SetGraphicsUniformBufferBindings(stage, null);
                     continue;
                 }
 
@@ -971,16 +1029,14 @@ namespace Ryujinx.Graphics.Gpu.Engine
                 {
                     var descriptor = info.Textures[index];
 
-                    Target target = GetTarget(descriptor.Type);
+                    Target target = ShaderTexture.GetTarget(descriptor.Type);
 
-                    if (descriptor.IsBindless)
-                    {
-                        textureBindings[index] = new TextureBindingInfo(target, descriptor.CbufSlot, descriptor.CbufOffset, descriptor.Flags);
-                    }
-                    else
-                    {
-                        textureBindings[index] = new TextureBindingInfo(target, descriptor.HandleIndex, descriptor.Flags);
-                    }
+                    textureBindings[index] = new TextureBindingInfo(
+                        target,
+                        descriptor.Binding,
+                        descriptor.CbufSlot,
+                        descriptor.HandleIndex,
+                        descriptor.Flags);
                 }
 
                 TextureManager.SetGraphicsTextures(stage, textureBindings);
@@ -991,29 +1047,36 @@ namespace Ryujinx.Graphics.Gpu.Engine
                 {
                     var descriptor = info.Images[index];
 
-                    Target target = GetTarget(descriptor.Type);
+                    Target target = ShaderTexture.GetTarget(descriptor.Type);
+                    Format format = ShaderTexture.GetFormat(descriptor.Format);
 
-                    imageBindings[index] = new TextureBindingInfo(target, descriptor.HandleIndex, descriptor.Flags);
+                    imageBindings[index] = new TextureBindingInfo(
+                        target,
+                        format,
+                        descriptor.Binding,
+                        descriptor.CbufSlot,
+                        descriptor.HandleIndex,
+                        descriptor.Flags);
                 }
 
                 TextureManager.SetGraphicsImages(stage, imageBindings);
 
-                uint sbEnableMask = 0;
-                uint ubEnableMask = 0;
+                BufferManager.SetGraphicsStorageBufferBindings(stage, info.SBuffers);
+                BufferManager.SetGraphicsUniformBufferBindings(stage, info.CBuffers);
 
-                for (int index = 0; index < info.SBuffers.Count; index++)
+                if (info.SBuffers.Count != 0)
                 {
-                    sbEnableMask |= 1u << info.SBuffers[index].Slot;
+                    storageBufferBindingsCount = Math.Max(storageBufferBindingsCount, info.SBuffers.Max(x => x.Binding) + 1);
                 }
 
-                for (int index = 0; index < info.CBuffers.Count; index++)
+                if (info.CBuffers.Count != 0)
                 {
-                    ubEnableMask |= 1u << info.CBuffers[index].Slot;
+                    uniformBufferBindingsCount = Math.Max(uniformBufferBindingsCount, info.CBuffers.Max(x => x.Binding) + 1);
                 }
-
-                BufferManager.SetGraphicsStorageBufferEnableMask(stage, sbEnableMask);
-                BufferManager.SetGraphicsUniformBufferEnableMask(stage, ubEnableMask);
             }
+
+            BufferManager.SetGraphicsStorageBufferBindingsCount(storageBufferBindingsCount);
+            BufferManager.SetGraphicsUniformBufferBindingsCount(uniformBufferBindingsCount);
 
             _context.Renderer.Pipeline.SetProgram(gs.HostProgram);
         }
@@ -1054,53 +1117,6 @@ namespace Ryujinx.Graphics.Gpu.Engine
         }
 
         /// <summary>
-        /// Gets texture target from a sampler type.
-        /// </summary>
-        /// <param name="type">Sampler type</param>
-        /// <returns>Texture target value</returns>
-        private static Target GetTarget(SamplerType type)
-        {
-            type &= ~(SamplerType.Indexed | SamplerType.Shadow);
-
-            switch (type)
-            {
-                case SamplerType.Texture1D:
-                    return Target.Texture1D;
-
-                case SamplerType.TextureBuffer:
-                    return Target.TextureBuffer;
-
-                case SamplerType.Texture1D | SamplerType.Array:
-                    return Target.Texture1DArray;
-
-                case SamplerType.Texture2D:
-                    return Target.Texture2D;
-
-                case SamplerType.Texture2D | SamplerType.Array:
-                    return Target.Texture2DArray;
-
-                case SamplerType.Texture2D | SamplerType.Multisample:
-                    return Target.Texture2DMultisample;
-
-                case SamplerType.Texture2D | SamplerType.Multisample | SamplerType.Array:
-                    return Target.Texture2DMultisampleArray;
-
-                case SamplerType.Texture3D:
-                    return Target.Texture3D;
-
-                case SamplerType.TextureCube:
-                    return Target.Cubemap;
-
-                case SamplerType.TextureCube | SamplerType.Array:
-                    return Target.CubemapArray;
-            }
-
-            Logger.PrintWarning(LogClass.Gpu, $"Invalid sampler type \"{type}\".");
-
-            return Target.Texture2D;
-        }
-
-        /// <summary>
         /// Issues a texture barrier.
         /// This waits until previous texture writes from the GPU to finish, before
         /// performing new operations with said textures.
@@ -1110,16 +1126,6 @@ namespace Ryujinx.Graphics.Gpu.Engine
         private void TextureBarrier(GpuState state, int argument)
         {
             _context.Renderer.Pipeline.TextureBarrier();
-        }
-
-        /// <summary>
-        /// Invalidates all modified textures on the cache.
-        /// </summary>
-        /// <param name="state">Current GPU state (unused)</param>
-        /// <param name="argument">Method call argument (unused)</param>
-        private void InvalidateTextures(GpuState state, int argument)
-        {
-            TextureManager.Flush();
         }
 
         /// <summary>

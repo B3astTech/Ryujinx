@@ -83,13 +83,10 @@ namespace Ryujinx.Graphics.Nvdec.Vp9.Types
         public Ptr<Vp9EntropyProbs> Fc;
         public Ptr<Vp9BackwardUpdates> Counts;
 
-        public bool FrameParallelDecodingMode;
-
         public int Log2TileCols, Log2TileRows;
 
         public ArrayPtr<sbyte> AboveSegContext;
         public ArrayPtr<sbyte> AboveContext;
-        public int AboveContextAllocCols;
 
         public bool FrameIsIntraOnly()
         {
