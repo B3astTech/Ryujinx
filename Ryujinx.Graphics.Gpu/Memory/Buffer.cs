@@ -183,7 +183,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="size">The size of the modified region</param>
         public void SignalModified(ulong address, ulong size)
         {
-            EnsureRangeList();
+            return;
 
             _modifiedRanges.SignalModified(address, size);
 
