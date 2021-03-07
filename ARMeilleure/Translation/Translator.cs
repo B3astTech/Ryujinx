@@ -11,8 +11,10 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime;
 using System.Threading;
 
+using static ARMeilleure.Common.BitMapPool;
 using static ARMeilleure.IntermediateRepresentation.OperandHelper;
 using static ARMeilleure.IntermediateRepresentation.OperationHelper;
 
@@ -148,10 +150,12 @@ namespace ARMeilleure.Translation
 
                 ClearJitCache();
 
-                ResetPools();
+                DisposePools();
 
                 _jumpTable.Dispose();
                 _jumpTable = null;
+
+                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
             }
         }
 
@@ -207,7 +211,7 @@ namespace ARMeilleure.Translation
 
             Logger.EndPass(PassName.Decoding);
 
-            PreparePool(highCq);
+            PreparePool(highCq ? 1 : 0);
 
             Logger.StartPass(PassName.Translation);
 
@@ -240,13 +244,15 @@ namespace ARMeilleure.Translation
             {
                 func = Compiler.Compile<GuestFunction>(cfg, argTypes, OperandType.I64, options);
 
-                ReturnPool(highCq);
+                ResetPool(highCq ? 1 : 0);
             }
-            else using (PtcInfo ptcInfo = new PtcInfo())
+            else
             {
+                using PtcInfo ptcInfo = new PtcInfo();
+
                 func = Compiler.Compile<GuestFunction>(cfg, argTypes, OperandType.I64, options, ptcInfo);
 
-                ReturnPool(highCq);
+                ResetPool(highCq ? 1 : 0);
 
                 Ptc.WriteInfoCodeRelocUnwindInfo(address, funcSize, highCq, ptcInfo);
             }
@@ -254,22 +260,23 @@ namespace ARMeilleure.Translation
             return new TranslatedFunction(func, funcSize, highCq);
         }
 
-        internal static void PreparePool(bool highCq)
+        internal static void PreparePool(int groupId = 0)
         {
-            PrepareOperandPool(highCq);
-            PrepareOperationPool(highCq);
+            PrepareOperandPool(groupId);
+            PrepareOperationPool(groupId);
         }
 
-        internal static void ReturnPool(bool highCq)
+        internal static void ResetPool(int groupId = 0)
         {
-            ReturnOperandPool(highCq);
-            ReturnOperationPool(highCq);
+            ResetOperationPool(groupId);
+            ResetOperandPool(groupId);
         }
 
-        internal static void ResetPools()
+        internal static void DisposePools()
         {
-            ResetOperandPools();
-            ResetOperationPools();
+            DisposeOperandPools();
+            DisposeOperationPools();
+            DisposeBitMapPools();
         }
 
         private struct Range
@@ -390,33 +397,10 @@ namespace ARMeilleure.Translation
 
         public void InvalidateJitCacheRegion(ulong address, ulong size)
         {
-            static bool OverlapsWith(ulong funcAddress, ulong funcSize, ulong address, ulong size)
-            {
-                return funcAddress < address + size && address < funcAddress + funcSize;
-            }
+            // If rejit is running, stop it as it may be trying to rejit a function on the invalidated region.
+            ClearRejitQueue(allowRequeue: true);
 
-            // Make a copy of all overlapping functions, as we can't otherwise
-            // remove elements from the collection we are iterating.
-            // Doing that before clearing the rejit queue is fine, even
-            // if a function is translated after this, it would only replace
-            // a existing function, as rejit is only triggered on functions
-            // that were already executed before.
-            var toDelete = _funcs.Where(x => OverlapsWith(x.Key, x.Value.GuestSize, address, size)).ToArray();
-
-            if (toDelete.Length != 0)
-            {
-                // If rejit is running, stop it as it may be trying to rejit the functions we are
-                // supposed to remove.
-                ClearRejitQueue();
-            }
-
-            foreach (var kv in toDelete)
-            {
-                if (_funcs.TryRemove(kv.Key, out TranslatedFunction func))
-                {
-                    EnqueueForDeletion(kv.Key, func);
-                }
-            }
+            // TODO: Completely remove functions overlapping the specified range from the cache.
         }
 
         private void EnqueueForDeletion(ulong guestAddress, TranslatedFunction func)
@@ -427,7 +411,7 @@ namespace ARMeilleure.Translation
         private void ClearJitCache()
         {
             // Ensure no attempt will be made to compile new functions due to rejit.
-            ClearRejitQueue();
+            ClearRejitQueue(allowRequeue: false);
 
             foreach (var kv in _funcs)
             {
@@ -442,10 +426,25 @@ namespace ARMeilleure.Translation
             }
         }
 
-        private void ClearRejitQueue()
+        private void ClearRejitQueue(bool allowRequeue)
         {
             _backgroundTranslatorLock.AcquireWriterLock(Timeout.Infinite);
-            _backgroundStack.Clear();
+
+            if (allowRequeue)
+            {
+                while (_backgroundStack.TryPop(out var request))
+                {
+                    if (_funcs.TryGetValue(request.Address, out var func))
+                    {
+                        func.ResetCallCount();
+                    }
+                }
+            }
+            else
+            {
+                _backgroundStack.Clear();
+            }
+
             _backgroundTranslatorLock.ReleaseWriterLock();
         }
     }
